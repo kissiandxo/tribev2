@@ -1,0 +1,157 @@
+{
+  "name": "Kit 7 — Product Feed Manager (Google Shopping + Local Service Ads)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "days", "daysInterval": 1, "triggerAtHour": 3 }] }
+      },
+      "id": "cron-daily",
+      "name": "Daily 3am Cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "notes": "Refreshes product feed and Shopping ads daily at 3am"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "Business Config",
+        "options": {}
+      },
+      "id": "load-config",
+      "name": "Load Business Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.business_type }}",
+              "rightValue": "product",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "product-or-service",
+      "name": "Product or Service Business?",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 300],
+      "notes": "Routes to Shopping feed (products) or LSA setup (services)"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.website_url }}/sitemap.xml",
+        "options": {}
+      },
+      "id": "scrape-products",
+      "name": "Scrape Product Pages from Sitemap",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 180],
+      "notes": "Pulls product URLs from sitemap. Alternative: use Shopify/WooCommerce API if available."
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a Google Shopping and product SEO expert.\n\nBusiness: {{ $('load-config').item.json.business_name }}\nWebsite: {{ $('load-config').item.json.website_url }}\n\nProduct pages found:\n{{ $json.product_urls }}\n\nFor each product, generate a complete Google Merchant Centre feed entry:\n- id: unique product SKU or URL slug\n- title: SEO-optimised product title (max 150 chars, include brand + key descriptor + material/size if relevant)\n- description: 500-word product description optimised for Google Shopping (includes: primary keyword, secondary keywords, features, benefits, specifications, use cases)\n- google_product_category: Most specific Google product taxonomy category\n- product_type: Internal product type\n- link: Product URL\n- image_link: Main product image URL\n- availability: in stock / out of stock / preorder\n- price: (pull from page or mark as NEEDS_UPDATE if not found)\n- brand: {{ $('load-config').item.json.business_name }}\n- condition: new\n- shipping: AU standard shipping\n- custom_labels: Array of 5 custom labels for campaign segmentation (e.g. bestseller, high_margin, seasonal, new_arrival)\n\nAlso generate:\n- shopping_campaign_structure: How to organise these products into Shopping ad campaigns (by category, margin, seasonality)\n- performance_max_asset_groups: 3 Performance Max asset group names with headlines and descriptions\n\nReturn as JSON with field 'feed_items' containing array of product objects."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-product-feed",
+      "name": "Claude — Generate Optimised Product Feed",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [1120, 180],
+      "notes": "Claude reads product pages and generates fully optimised Google Merchant Centre feed entries with Shopping-specific titles and descriptions"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://shoppingcontent.googleapis.com/content/v2.1/{{ $env.GMC_MERCHANT_ID }}/products/batch",
+        "authentication": "oAuth2",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"entries\": {{ JSON.stringify($json.feed_items.map((item, i) => ({\n    batchId: i + 1,\n    merchantId: process.env.GMC_MERCHANT_ID,\n    method: 'insert',\n    product: {\n      ...item,\n      targetCountry: 'AU',\n      contentLanguage: 'en',\n      channel: 'online'\n    }\n  }))) }}\n}"
+        },
+        "options": {}
+      },
+      "id": "upload-to-gmc",
+      "name": "Upload Feed to Google Merchant Centre",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 180],
+      "notes": "Uploads the optimised product feed to Google Merchant Centre via Content API v2.1"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a Google Local Service Ads expert for Australian trades and service businesses.\n\nBusiness: {{ $('load-config').item.json.business_name }}\nIndustry: {{ $('load-config').item.json.industry }}\nCity: {{ $('load-config').item.json.city }}\nServices offered: {{ $('load-config').item.json.services }}\n\nGenerate a complete Google Local Service Ads setup package:\n\n1. lsa_business_description: 300-char LSA business description (emphasise response time, licensing, guarantee)\n\n2. service_list: All eligible LSA services for this industry category (formatted exactly as Google LSA service names)\n\n3. service_areas: All suburbs to enable as service areas (pull from business config suburbs list)\n\n4. business_hours: Recommended operating hours for maximum LSA visibility\n\n5. budget_recommendation: Weekly LSA budget recommendation based on industry and city size\n\n6. google_guarantee_checklist: Step-by-step list of documents needed to get Google Guaranteed badge (licence numbers, insurance, background check process for AU)\n\n7. ad_headline_variants: 5 headline variants to A/B test (focus on response time, guarantee, pricing transparency)\n\n8. negative_keywords: 20 negative keywords to exclude irrelevant clicks\n\nReturn as JSON."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-lsa",
+      "name": "Claude — LSA Setup Package",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [900, 420],
+      "notes": "Generates complete Local Service Ads setup for service-based businesses (trades, health, legal)"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "title": "={{ $('load-config').item.json.business_name }} — LSA Setup Instructions",
+        "content": "=# Google Local Service Ads Setup Guide\n\n## Business Description (copy this exactly)\n{{ $json.lsa_business_description }}\n\n## Services to Enable\n{{ $json.service_list.map((s, i) => (i+1) + '. ' + s).join('\\n') }}\n\n## Budget Recommendation\n{{ $json.budget_recommendation }}\n\n## Google Guaranteed Checklist\n{{ $json.google_guarantee_checklist.map((item, i) => '[ ] ' + item).join('\\n') }}\n\n## A/B Test Headlines\n{{ $json.ad_headline_variants.map((h, i) => (i+1) + '. ' + h).join('\\n') }}\n\n## Negative Keywords\n{{ $json.negative_keywords.join(', ') }}"
+      },
+      "id": "save-lsa-doc",
+      "name": "Save LSA Setup to Google Doc",
+      "type": "n8n-nodes-base.googleDocs",
+      "position": [1120, 420],
+      "notes": "Creates a setup guide for the LSA configuration"
+    },
+    {
+      "parameters": {
+        "to": "={{ $('load-config').item.json.owner_whatsapp }}",
+        "message": "=🛍️ *Product Feed / Ad Setup Update*\n\n{{ $('product-or-service').item.json.business_type === 'product' ? '✅ ' + $('claude-product-feed').item.json.feed_items.length + ' products uploaded to Google Merchant Centre\\n✅ Shopping ads feed refreshed\\n✅ Performance Max asset groups updated' : '✅ Local Service Ads setup guide created\\n✅ Google Guaranteed checklist saved\\n📋 Check your Google Docs for the setup instructions — 30 mins to get LSA live' }}"
+      },
+      "id": "whatsapp-feed-done",
+      "name": "WhatsApp — Feed Update Complete",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1560, 300]
+    }
+  ],
+  "connections": {
+    "Daily 3am Cron": { "main": [[{ "node": "Load Business Config", "type": "main", "index": 0 }]] },
+    "Load Business Config": { "main": [[{ "node": "Product or Service Business?", "type": "main", "index": 0 }]] },
+    "Product or Service Business?": {
+      "main": [
+        [{ "node": "Scrape Product Pages from Sitemap", "type": "main", "index": 0 }],
+        [{ "node": "Claude — LSA Setup Package", "type": "main", "index": 0 }]
+      ]
+    },
+    "Scrape Product Pages from Sitemap": { "main": [[{ "node": "Claude — Generate Optimised Product Feed", "type": "main", "index": 0 }]] },
+    "Claude — Generate Optimised Product Feed": { "main": [[{ "node": "Upload Feed to Google Merchant Centre", "type": "main", "index": 0 }]] },
+    "Upload Feed to Google Merchant Centre": { "main": [[{ "node": "WhatsApp — Feed Update Complete", "type": "main", "index": 0 }]] },
+    "Claude — LSA Setup Package": { "main": [[{ "node": "Save LSA Setup to Google Doc", "type": "main", "index": 0 }]] },
+    "Save LSA Setup to Google Doc": { "main": [[{ "node": "WhatsApp — Feed Update Complete", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "kit": "Kit 7 — City Presence Grid",
+    "workflow": "product-feed-manager",
+    "version": "1.0",
+    "description": "For product businesses: scrapes product pages, generates optimised Google Shopping feed entries via Claude, uploads to Merchant Centre. For service businesses: generates complete Local Service Ads setup including Google Guaranteed checklist."
+  }
+}

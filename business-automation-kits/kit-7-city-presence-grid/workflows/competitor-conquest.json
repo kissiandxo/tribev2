@@ -1,0 +1,224 @@
+{
+  "name": "Kit 7 — Competitor Conquest (Bid On Rivals, Monitor & Strike)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "days", "daysInterval": 1, "triggerAtHour": 5 }] }
+      },
+      "id": "cron-daily",
+      "name": "Daily 5am Cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "notes": "Runs daily at 5am to check competitor activity and optimise conquest campaigns"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "Business Config",
+        "options": {}
+      },
+      "id": "load-config",
+      "name": "Load Business Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "Competitors",
+        "options": {}
+      },
+      "id": "load-competitors",
+      "name": "Load Competitor List",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [680, 300],
+      "notes": "Loads competitor names, websites, GBP URLs, and ad spend estimates"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.semrush.com/",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "type", "value": "domain_organic" },
+            { "name": "key", "value": "={{ $env.SEMRUSH_API_KEY }}" },
+            { "name": "domain", "value": "={{ $json.website }}" },
+            { "name": "database", "value": "au" },
+            { "name": "display_limit", "value": "20" },
+            { "name": "export_columns", "value": "Ph,Po,Nq,Cp,Ur,Tr" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "semrush-competitor",
+      "name": "Semrush — Competitor Keyword Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 200],
+      "notes": "Pulls competitor's top organic keywords, rankings, and estimated traffic. Identifies keyword gaps."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "q", "value": "={{ $json.competitor_name }}" },
+            { "name": "location", "value": "={{ $('load-config').item.json.city }}, Australia" },
+            { "name": "gl", "value": "au" },
+            { "name": "api_key", "value": "={{ $env.SERPAPI_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "serp-competitor-brand",
+      "name": "SERP — Check Competitor Brand Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 400],
+      "notes": "Checks competitor's brand SERP. If OUR ad is not showing above them, conquest campaign needs update."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://maps.googleapis.com/maps/api/place/details/json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "place_id", "value": "={{ $json.gbp_place_id }}" },
+            { "name": "fields", "value": "name,rating,user_ratings_total,reviews" },
+            { "name": "key", "value": "={{ $env.GOOGLE_MAPS_API_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "check-competitor-reviews",
+      "name": "Check Competitor GBP Reviews",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 300],
+      "notes": "Monitors competitor review count and rating. Alerts when they drop a rating or get negative reviews — prime time to increase ad spend."
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a competitive Google Ads strategist.\n\nOur business: {{ $('load-config').item.json.business_name }}\nIndustry: {{ $('load-config').item.json.industry }}\nCity: {{ $('load-config').item.json.city }}\n\nCompetitor: {{ $json.competitor_name }}\nCompetitor website: {{ $json.website }}\nCompetitor current rating: {{ $json.rating }} ({{ $json.user_ratings_total }} reviews)\nCompetitor top keywords: {{ JSON.stringify($('semrush-competitor').item.json, null, 2) }}\n\nOur current Google Ads conquest campaign status: {{ $json.conquest_campaign_status }}\n\nGenerate:\n\n1. conquest_ad_headlines: 10 Google Ads headlines (30 chars max each) that appear when someone searches the competitor's name. Should be comparative without being disparaging. Emphasise our strengths (speed, guarantee, price, reviews).\n\n2. conquest_ad_descriptions: 5 Google Ads descriptions (90 chars max each)\n\n3. conquest_landing_page_brief: Brief for a dedicated comparison landing page '[us] vs [competitor]'. Include:\n   - Page title (SEO-optimised)\n   - H1\n   - Comparison table (5 key differentiators)\n   - 3 customer testimonials placeholders\n   - FAQ (5 questions people ask when choosing between these two)\n   - Strong CTA\n\n4. competitor_weakness_analysis: Based on their reviews and keywords, what are their top 3 weaknesses we should highlight?\n\n5. bid_recommendation: Should we increase/decrease/maintain conquest bid today? Reasoning (e.g. 'competitor dropped from 4.8 to 4.3 stars — increase bid 30% to capture their dissatisfied leads').\n\n6. alert_needed: true/false — Should owner be alerted about a significant competitor change?\n7. alert_message: If yes, what should the WhatsApp say?\n\nReturn as JSON."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-conquest",
+      "name": "Claude — Conquest Strategy & Ad Copy",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [1340, 300],
+      "notes": "Claude analyses competitor weaknesses and generates conquest ad copy + landing page brief"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://googleads.googleapis.com/v14/customers/{{ $env.GOOGLE_ADS_CUSTOMER_ID }}/googleAds:mutate",
+        "authentication": "oAuth2",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"mutateOperations\": [{\n    \"adGroupAdOperation\": {\n      \"create\": {\n        \"adGroup\": \"customers/{{ $env.GOOGLE_ADS_CUSTOMER_ID }}/adGroups/{{ $json.conquest_ad_group_id }}\",\n        \"ad\": {\n          \"responsiveSearchAd\": {\n            \"headlines\": {{ JSON.stringify($('claude-conquest').item.json.conquest_ad_headlines.map(h => ({ text: h }))) }},\n            \"descriptions\": {{ JSON.stringify($('claude-conquest').item.json.conquest_ad_descriptions.map(d => ({ text: d }))) }}\n          },\n          \"finalUrls\": [\"{{ $('load-config').item.json.website_url }}/vs-{{ $json.competitor_name.toLowerCase().replace(/ /g, '-') }}\"]\n        },\n        \"status\": \"ENABLED\"\n      }\n    }\n  }]\n}"
+        },
+        "options": {}
+      },
+      "id": "google-ads-update",
+      "name": "Update Google Ads Conquest Creative",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1560, 200],
+      "notes": "Updates Google Ads responsive search ad for competitor conquest campaign with fresh Claude-generated copy"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $('claude-conquest').item.json.alert_needed }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-alert",
+      "name": "Alert Owner?",
+      "type": "n8n-nodes-base.if",
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "to": "={{ $('load-config').item.json.owner_whatsapp }}",
+        "message": "=⚡ *Competitor Alert — Action Recommended*\n\n{{ $('claude-conquest').item.json.alert_message }}\n\n🎯 Ad copy updated automatically to capitalise on this opportunity.\n💰 Bid adjustment applied: {{ $('claude-conquest').item.json.bid_recommendation }}"
+      },
+      "id": "whatsapp-alert",
+      "name": "WhatsApp — Competitor Alert",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1780, 400],
+      "notes": "Alerts owner when a significant competitor change is detected (rating drop, new ad, price change)"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "Competitor Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ new Date().toISOString().split('T')[0] }}",
+            "competitor": "={{ $json.competitor_name }}",
+            "rating": "={{ $json.rating }}",
+            "review_count": "={{ $json.user_ratings_total }}",
+            "bid_action": "={{ $('claude-conquest').item.json.bid_recommendation }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-competitor",
+      "name": "Log Competitor Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1780, 250],
+      "notes": "Tracks competitor metrics over time for trend analysis"
+    }
+  ],
+  "connections": {
+    "Daily 5am Cron": { "main": [[{ "node": "Load Business Config", "type": "main", "index": 0 }]] },
+    "Load Business Config": { "main": [[{ "node": "Load Competitor List", "type": "main", "index": 0 }]] },
+    "Load Competitor List": {
+      "main": [[
+        { "node": "Semrush — Competitor Keyword Check", "type": "main", "index": 0 },
+        { "node": "SERP — Check Competitor Brand Results", "type": "main", "index": 0 }
+      ]]
+    },
+    "Semrush — Competitor Keyword Check": { "main": [[{ "node": "Check Competitor GBP Reviews", "type": "main", "index": 0 }]] },
+    "Check Competitor GBP Reviews": { "main": [[{ "node": "Claude — Conquest Strategy & Ad Copy", "type": "main", "index": 0 }]] },
+    "Claude — Conquest Strategy & Ad Copy": {
+      "main": [[
+        { "node": "Update Google Ads Conquest Creative", "type": "main", "index": 0 },
+        { "node": "Alert Owner?", "type": "main", "index": 0 },
+        { "node": "Log Competitor Data", "type": "main", "index": 0 }
+      ]]
+    },
+    "Alert Owner?": {
+      "main": [
+        [{ "node": "WhatsApp — Competitor Alert", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "kit": "Kit 7 — City Presence Grid",
+    "workflow": "competitor-conquest",
+    "version": "1.0",
+    "description": "Daily competitor monitoring and conquest campaign management. Checks competitor GBP ratings, keywords, and ad spend. Claude generates fresh conquest ad copy targeting competitor brand searches. Alerts owner when competitors drop in rating or make significant moves."
+  }
+}

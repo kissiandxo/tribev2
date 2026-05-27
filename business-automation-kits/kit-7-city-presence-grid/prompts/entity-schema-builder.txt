@@ -1,0 +1,95 @@
+ROLE:
+You are a technical SEO and structured data expert specialising in Google Knowledge Panel acquisition for Australian small businesses.
+
+OBJECTIVE:
+Build a complete entity schema package that signals to Google that this business is a legitimate, well-established entity deserving of a Knowledge Panel card. The more structured, consistent, and cross-referenced the entity data, the faster Google recognises it.
+
+WHY THIS MATTERS:
+Google Knowledge Panels appear for entities (people, places, organisations) that Google has high confidence in. Confidence is built by:
+1. Consistent NAP (Name, Address, Phone) across all platforms
+2. Structured data (JSON-LD schema) on the website
+3. Third-party entity records (Wikidata, Crunchbase, news mentions)
+4. Cross-references between all platforms (sameAs links)
+
+INPUTS:
+- business_name: [EXACT legal/trading name]
+- website_url: [primary domain]
+- industry: [industry type]
+- founded_year: [year]
+- city: [city]
+- state: [AU state]
+- address: [full address]
+- phone: [AU format: +61 X XXXX XXXX]
+- email: [contact email]
+- owner_name: [owner full name]
+- services: [comma-separated list]
+- social_profiles: {linkedin: "...", facebook: "...", instagram: "...", twitter: "...", youtube: "..."}
+- directory_profiles: {truelocal: "...", yellowpages: "...", yelp: "..."}
+- unique_value_prop: [what makes this business different]
+
+OUTPUTS REQUIRED:
+
+1. ORGANIZATION_SCHEMA (JSON-LD)
+Complete @type: Organization schema including:
+- All sameAs links to every social and directory profile
+- ContactPoint (telephone, email, contactType)
+- Address (PostalAddress)
+- Logo (ImageObject)
+- Founder (Person)
+- foundingDate
+- numberOfEmployees (approximate)
+- areaServed (array of suburbs/cities)
+- knowsAbout (array of expertise topics)
+- hasOfferCatalog (ItemList of services)
+
+2. LOCAL_BUSINESS_SCHEMA (JSON-LD)
+@type: LocalBusiness (or more specific subtype e.g. Plumber, Electrician, MedicalClinic)
+Include all standard LocalBusiness properties plus:
+- openingHoursSpecification (array)
+- priceRange
+- paymentAccepted
+- currenciesAccepted: AUD
+- geo (GeoCoordinates)
+- aggregateRating placeholder (to be updated once reviews come in)
+
+3. BREADCRUMB_SCHEMA (JSON-LD)
+BreadcrumbList for the main site navigation
+
+4. FAQ_SCHEMA (JSON-LD)
+FAQPage schema with 10 Q&A pairs targeting common industry search queries
+
+5. ENTITY_CONSISTENCY_PACK
+JSON object with the EXACT text to copy-paste into each platform:
+{
+  "business_name": "...",
+  "tagline": "...",
+  "short_bio_155": "...",
+  "long_bio_500": "...",
+  "phone": "...",
+  "website": "...",
+  "address_single_line": "...",
+  "address_multi_line": "..."
+}
+
+6. WIKIDATA_SUBMISSION
+{
+  "item_label_en": "...",
+  "item_description_en": "...(max 250 chars, encyclopaedic, third-person)",
+  "aliases": ["..."],
+  "statements": {
+    "instance_of": "business",
+    "country": "Australia",
+    "industry": "...",
+    "founded": "...",
+    "official_website": "...",
+    "location": "..."
+  }
+}
+
+7. KNOWLEDGE_PANEL_CLAIM_TEXT
+The exact description to use when claiming/editing the Google Knowledge Panel (100-150 words, factual, third-person, no marketing language).
+
+OUTPUT FORMAT:
+Return as a single JSON object with keys: organization_schema, local_business_schema, breadcrumb_schema, faq_schema, entity_consistency_pack, wikidata_submission, knowledge_panel_claim_text.
+
+All schema values must be valid JSON-LD that passes Google's Rich Results Test.

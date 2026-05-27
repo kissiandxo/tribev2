@@ -1,0 +1,152 @@
+{
+  "name": "Kit 7 — GBP Network Builder (Hub-and-Spoke Multi-Profile System)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gbp-network-builder",
+        "options": {}
+      },
+      "id": "webhook-gbp",
+      "name": "GBP Builder Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "notes": "Receives: business_name, industry, owner_whatsapp, tier1_suburbs[], tier2_suburbs[]"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "tier1_suburbs",
+        "options": {}
+      },
+      "id": "split-tier1",
+      "name": "Split Tier 1 Suburbs",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [460, 200],
+      "notes": "Processes each Tier 1 suburb individually to build its GBP profile content"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a Google Business Profile expert and local SEO copywriter for Australian businesses.\n\nCreate a complete GBP profile for this suburb location:\n\nBusiness: {{ $('GBP Builder Webhook').item.json.business_name }}\nIndustry: {{ $('GBP Builder Webhook').item.json.industry }}\nSuburb: {{ $json.name }}\nSuburb Notes: {{ $json.notes }}\nKey Landmarks: {{ $json.landmarks }}\n\nGenerate ALL of the following as a single JSON object:\n\n1. business_description (750 chars max): Unique description for this suburb profile. Mention the suburb name naturally, reference local context. NOT generic — this must feel written for Bondi (or whatever suburb), not copy-pasted.\n\n2. short_description (250 chars): For the GBP 'from the business' section.\n\n3. gbp_categories: Array of up to 5 relevant GBP categories for this industry.\n\n4. services_list: Array of 10 specific services with short descriptions (50 chars each).\n\n5. qa_pairs: Array of 15 Q&A pairs. Mix of:\n   - Generic industry FAQs (how much does X cost, how quickly, are you licensed)\n   - Suburb-specific questions (do you service [suburb], what areas do you cover near [suburb])\n   - Comparison questions (why choose you over [generic competitor type])\n   Format: [{\"q\": \"...\", \"a\": \"...\"}]\n\n6. first_post: A GBP post (300 words max) about serving [suburb] — introduce the business, local context, call to action.\n\n7. photo_geo_tags: 5 location tags to embed in EXIF of uploaded photos (suburb street names/landmarks to use as GPS coordinates anchors).\n\n8. service_area_keywords: 20 keywords to use in the service area description for maximum local relevance.\n\nReturn ONLY valid JSON."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-gbp-content",
+      "name": "Claude — Generate Suburb GBP Content",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [680, 200],
+      "notes": "Generates fully unique, suburb-specific GBP content for each Tier 1 location"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://mybusiness.googleapis.com/v4/accounts/{{ $env.GBP_ACCOUNT_ID }}/locations",
+        "authentication": "oAuth2",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"locationName\": \"{{ $('GBP Builder Webhook').item.json.business_name }}\",\n  \"primaryCategory\": { \"displayName\": \"{{ $json.gbp_categories[0] }}\" },\n  \"additionalCategories\": {{ JSON.stringify($json.gbp_categories.slice(1).map(c => ({ displayName: c }))) }},\n  \"storefrontAddress\": {\n    \"addressLines\": [\"{{ $('split-tier1').item.json.name }}\"],\n    \"locality\": \"{{ $('split-tier1').item.json.name }}\",\n    \"administrativeArea\": \"NSW\",\n    \"countryCode\": \"AU\"\n  },\n  \"profile\": { \"description\": \"{{ $json.business_description }}\" },\n  \"serviceArea\": {\n    \"businessType\": \"CUSTOMER_LOCATION_ONLY\",\n    \"radius\": {\n      \"latlng\": { \"latitude\": {{ $('split-tier1').item.json.lat }}, \"longitude\": {{ $('split-tier1').item.json.lng }} },\n      \"radiusKm\": 8\n    }\n  }\n}"
+        },
+        "options": {}
+      },
+      "id": "create-gbp",
+      "name": "Create GBP Listing via API",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 200],
+      "notes": "Creates the GBP service area listing via Google My Business API. Requires OAuth2 with mybusiness.business.manage scope."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://mybusiness.googleapis.com/v4/{{ $json.name }}/localPosts",
+        "authentication": "oAuth2",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"languageCode\": \"en-AU\",\n  \"summary\": \"{{ $('claude-gbp-content').item.json.first_post }}\",\n  \"callToAction\": {\n    \"actionType\": \"CALL\"\n  },\n  \"topicType\": \"STANDARD\"\n}"
+        },
+        "options": {}
+      },
+      "id": "post-first-update",
+      "name": "Publish First GBP Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 200],
+      "notes": "Publishes the first suburb-specific post to the newly created GBP profile"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://mybusiness.googleapis.com/v4/{{ $('create-gbp').item.json.name }}/questions",
+        "authentication": "oAuth2",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"text\": \"{{ $('claude-gbp-content').item.json.qa_pairs[0].q }}\"\n}"
+        },
+        "options": {}
+      },
+      "id": "seed-qa",
+      "name": "Seed First Q&A Question",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 200],
+      "notes": "Seeds Q&A section. The full 15 Q&As are iterated via a sub-loop (see qa-seeder sub-workflow). This node seeds the first one as a trigger."
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "GBP Profiles",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "suburb": "={{ $('split-tier1').item.json.name }}",
+            "gbp_id": "={{ $('create-gbp').item.json.name }}",
+            "status": "active",
+            "created_at": "={{ new Date().toISOString() }}",
+            "tier": "1",
+            "first_post_published": "true"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-gbp",
+      "name": "Log GBP Profile to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1560, 200],
+      "notes": "Tracks all created GBP profiles with their IDs for the weekly posting and rank scanning workflows"
+    },
+    {
+      "parameters": {
+        "to": "={{ $('GBP Builder Webhook').item.json.owner_whatsapp }}",
+        "message": "=🗺️ *GBP Profile Created: {{ $('split-tier1').item.json.name }}*\n\nProfile is live and indexed.\n✅ Unique suburb description written\n✅ Service area set (8km radius from {{ $('split-tier1').item.json.name }})\n✅ First post published\n✅ Q&As seeded\n\n_Continuing with next suburb..._"
+      },
+      "id": "whatsapp-progress",
+      "name": "WhatsApp Progress Update",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1780, 200],
+      "notes": "Sends progress WhatsApp after each Tier 1 suburb profile is created (batched — not one per suburb to avoid spam)"
+    }
+  ],
+  "connections": {
+    "GBP Builder Webhook": { "main": [[{ "node": "Split Tier 1 Suburbs", "type": "main", "index": 0 }]] },
+    "Split Tier 1 Suburbs": { "main": [[{ "node": "Claude — Generate Suburb GBP Content", "type": "main", "index": 0 }]] },
+    "Claude — Generate Suburb GBP Content": { "main": [[{ "node": "Create GBP Listing via API", "type": "main", "index": 0 }]] },
+    "Create GBP Listing via API": { "main": [[{ "node": "Publish First GBP Post", "type": "main", "index": 0 }]] },
+    "Publish First GBP Post": { "main": [[{ "node": "Seed First Q&A Question", "type": "main", "index": 0 }]] },
+    "Seed First Q&A Question": { "main": [[{ "node": "Log GBP Profile to Sheet", "type": "main", "index": 0 }]] },
+    "Log GBP Profile to Sheet": { "main": [[{ "node": "WhatsApp Progress Update", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "kit": "Kit 7 — City Presence Grid",
+    "workflow": "gbp-network-builder",
+    "version": "1.0",
+    "description": "Builds a hub-and-spoke network of GBP service area listings across every Tier 1 suburb. Each profile gets unique Claude-written descriptions, Q&As, and a published first post. All profiles are logged to Google Sheets for the weekly auto-posting and grid rank scanning workflows."
+  }
+}

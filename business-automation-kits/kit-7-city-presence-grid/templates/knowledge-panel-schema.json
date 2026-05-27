@@ -1,0 +1,233 @@
+{
+  "_instructions": "Replace all {{PLACEHOLDER}} values with your business data. Paste the schema blocks into your website <head> section. Validate at: https://search.google.com/test/rich-results",
+
+  "organization_schema": {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "@id": "{{WEBSITE_URL}}/#organization",
+    "name": "{{BUSINESS_NAME}}",
+    "legalName": "{{LEGAL_BUSINESS_NAME}}",
+    "url": "{{WEBSITE_URL}}",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "{{WEBSITE_URL}}/logo.png",
+      "width": 512,
+      "height": 512
+    },
+    "image": "{{WEBSITE_URL}}/og-image.jpg",
+    "description": "{{BUSINESS_DESCRIPTION_300_CHARS}}",
+    "telephone": "{{PHONE_AU_FORMAT}}",
+    "email": "{{EMAIL}}",
+    "address": {
+      "@type": "PostalAddress",
+      "streetAddress": "{{STREET_ADDRESS}}",
+      "addressLocality": "{{SUBURB}}",
+      "addressRegion": "{{STATE}}",
+      "postalCode": "{{POSTCODE}}",
+      "addressCountry": "AU"
+    },
+    "geo": {
+      "@type": "GeoCoordinates",
+      "latitude": "{{LATITUDE}}",
+      "longitude": "{{LONGITUDE}}"
+    },
+    "founder": {
+      "@type": "Person",
+      "name": "{{OWNER_FULL_NAME}}",
+      "jobTitle": "{{OWNER_TITLE}}",
+      "sameAs": "{{OWNER_LINKEDIN_URL}}"
+    },
+    "foundingDate": "{{FOUNDED_YEAR}}",
+    "numberOfEmployees": {
+      "@type": "QuantitativeValue",
+      "value": "{{EMPLOYEE_COUNT_APPROX}}"
+    },
+    "areaServed": [
+      "{{SUBURB_1}}",
+      "{{SUBURB_2}}",
+      "{{SUBURB_3}}"
+    ],
+    "knowsAbout": [
+      "{{SERVICE_1}}",
+      "{{SERVICE_2}}",
+      "{{SERVICE_3}}"
+    ],
+    "hasOfferCatalog": {
+      "@type": "OfferCatalog",
+      "name": "{{BUSINESS_NAME}} Services",
+      "itemListElement": [
+        {
+          "@type": "Offer",
+          "itemOffered": {
+            "@type": "Service",
+            "name": "{{SERVICE_1}}",
+            "description": "{{SERVICE_1_DESCRIPTION}}"
+          }
+        },
+        {
+          "@type": "Offer",
+          "itemOffered": {
+            "@type": "Service",
+            "name": "{{SERVICE_2}}",
+            "description": "{{SERVICE_2_DESCRIPTION}}"
+          }
+        }
+      ]
+    },
+    "sameAs": [
+      "{{GOOGLE_BUSINESS_PROFILE_URL}}",
+      "{{LINKEDIN_COMPANY_PAGE_URL}}",
+      "{{FACEBOOK_PAGE_URL}}",
+      "{{INSTAGRAM_PROFILE_URL}}",
+      "{{YOUTUBE_CHANNEL_URL}}",
+      "{{TWITTER_URL}}",
+      "{{TIKTOK_URL}}",
+      "{{TRUELOCAL_URL}}",
+      "{{YELLOWPAGES_AU_URL}}",
+      "{{YELP_AU_URL}}",
+      "{{WIKIDATA_ITEM_URL}}",
+      "{{CRUNCHBASE_ORG_URL}}"
+    ],
+    "contactPoint": [
+      {
+        "@type": "ContactPoint",
+        "telephone": "{{PHONE_AU_FORMAT}}",
+        "contactType": "customer service",
+        "areaServed": "AU",
+        "availableLanguage": "English",
+        "hoursAvailable": {
+          "@type": "OpeningHoursSpecification",
+          "dayOfWeek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+          "opens": "07:00",
+          "closes": "18:00"
+        }
+      },
+      {
+        "@type": "ContactPoint",
+        "telephone": "{{PHONE_AU_FORMAT}}",
+        "contactType": "emergency",
+        "areaServed": "AU",
+        "availableLanguage": "English",
+        "description": "24/7 emergency service"
+      }
+    ],
+    "priceRange": "$$",
+    "paymentAccepted": "Cash, Credit Card, Bank Transfer, EFTPOS",
+    "currenciesAccepted": "AUD"
+  },
+
+  "local_business_schema": {
+    "@context": "https://schema.org",
+    "@type": ["LocalBusiness", "{{SCHEMA_SUBTYPE}}"],
+    "@id": "{{WEBSITE_URL}}/#localbusiness",
+    "name": "{{BUSINESS_NAME}}",
+    "url": "{{WEBSITE_URL}}",
+    "telephone": "{{PHONE_AU_FORMAT}}",
+    "address": {
+      "@type": "PostalAddress",
+      "streetAddress": "{{STREET_ADDRESS}}",
+      "addressLocality": "{{SUBURB}}",
+      "addressRegion": "{{STATE}}",
+      "postalCode": "{{POSTCODE}}",
+      "addressCountry": "AU"
+    },
+    "geo": {
+      "@type": "GeoCoordinates",
+      "latitude": "{{LATITUDE}}",
+      "longitude": "{{LONGITUDE}}"
+    },
+    "openingHoursSpecification": [
+      {
+        "@type": "OpeningHoursSpecification",
+        "dayOfWeek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        "opens": "07:00",
+        "closes": "18:00"
+      },
+      {
+        "@type": "OpeningHoursSpecification",
+        "dayOfWeek": "Saturday",
+        "opens": "08:00",
+        "closes": "15:00"
+      }
+    ],
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "ratingValue": "{{GOOGLE_RATING}}",
+      "reviewCount": "{{REVIEW_COUNT}}",
+      "bestRating": "5",
+      "worstRating": "1"
+    },
+    "image": [
+      "{{WEBSITE_URL}}/images/team-photo.jpg",
+      "{{WEBSITE_URL}}/images/work-sample-1.jpg",
+      "{{WEBSITE_URL}}/images/office-exterior.jpg"
+    ],
+    "priceRange": "$$",
+    "servesCuisine": null,
+    "areaServed": {
+      "@type": "GeoCircle",
+      "geoMidpoint": {
+        "@type": "GeoCoordinates",
+        "latitude": "{{LATITUDE}}",
+        "longitude": "{{LONGITUDE}}"
+      },
+      "geoRadius": "{{SERVICE_RADIUS_METRES}}"
+    }
+  },
+
+  "faq_schema_template": {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "How much does {{SERVICE_1}} cost in {{CITY}}?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "{{SERVICE_1}} in {{CITY}} typically costs $XX–$XX. {{BUSINESS_NAME}} offers fixed pricing with no hidden fees. Call us for a free quote: {{PHONE}}."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is {{BUSINESS_NAME}} available for emergency {{SERVICE_TYPE}} in {{CITY}}?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, {{BUSINESS_NAME}} offers 24/7 emergency {{SERVICE_TYPE}} across {{CITY}} and surrounding suburbs. Call {{PHONE}} any time."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Which suburbs does {{BUSINESS_NAME}} service?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "{{BUSINESS_NAME}} services all suburbs within {{SERVICE_RADIUS}}km of {{BASE_SUBURB}}, including {{SUBURB_LIST}}. Contact us to confirm coverage."
+        }
+      }
+    ]
+  },
+
+  "instructions_for_developer": {
+    "step_1": "Replace all {{PLACEHOLDER}} values with real business data",
+    "step_2": "Add the organization_schema and local_business_schema to every page's <head> section",
+    "step_3": "Add the faq_schema to the FAQ page and homepage",
+    "step_4": "Validate all schemas at https://search.google.com/test/rich-results",
+    "step_5": "Submit sitemap to Google Search Console after adding schemas",
+    "schema_subtypes_by_industry": {
+      "plumber": "Plumber",
+      "electrician": "Electrician",
+      "builder": "GeneralContractor",
+      "locksmith": "Locksmith",
+      "hvac": "HVACBusiness",
+      "dentist": "Dentist",
+      "doctor": "Physician",
+      "physio": "PhysicalTherapy",
+      "real_estate": "RealEstateAgent",
+      "lawyer": "LegalService",
+      "accountant": "AccountingService",
+      "restaurant": "Restaurant",
+      "beauty_salon": "BeautySalon",
+      "gym": "ExerciseGym",
+      "default": "LocalBusiness"
+    }
+  }
+}

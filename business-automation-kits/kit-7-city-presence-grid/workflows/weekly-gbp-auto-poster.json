@@ -1,0 +1,182 @@
+{
+  "name": "Kit 7 — Weekly GBP Auto-Poster (All Suburb Profiles)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "weeksInterval": 1, "triggerAtDay": [3], "triggerAtHour": 9 }] }
+      },
+      "id": "cron-gbp-posts",
+      "name": "Weekly Wednesday 9am Cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "notes": "Posts to all active GBP profiles every Wednesday at 9am. Different content for each profile."
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "GBP Profiles",
+        "options": {},
+        "filters": {
+          "values": [{ "lookupColumn": "status", "lookupValue": "active" }]
+        }
+      },
+      "id": "load-active-profiles",
+      "name": "Load All Active GBP Profiles",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 300],
+      "notes": "Loads all active GBP profiles from the sheet. Filters out suspended or inactive ones."
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "Business Config",
+        "options": {}
+      },
+      "id": "load-config",
+      "name": "Load Business Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 160],
+      "notes": "Loads business config for Claude context"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Rotate through 6 post angle types to keep content fresh\nconst angles = ['job_spotlight', 'seasonal_offer', 'local_faq', 'community', 'behind_the_scenes', 'milestone'];\nconst weekNumber = Math.floor(Date.now() / (7 * 24 * 60 * 60 * 1000));\nconst angleIndex = weekNumber % angles.length;\nconst thisWeekAngle = angles[angleIndex];\n\n// Get this month's season (AU seasons)\nconst month = new Date().getMonth() + 1;\nlet season = 'autumn';\nif (month >= 12 || month <= 2) season = 'summer';\nelse if (month >= 3 && month <= 5) season = 'autumn';\nelse if (month >= 6 && month <= 8) season = 'winter';\nelse season = 'spring';\n\nreturn $input.all().map(item => ({\n  json: { ...item.json, post_angle: thisWeekAngle, current_season: season }\n}));"
+      },
+      "id": "assign-post-angles",
+      "name": "Assign Post Angles (Rotating Weekly)",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "notes": "Rotates through 6 post angles so each week feels different. Includes AU season context for seasonal relevance."
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "suburb",
+        "options": {}
+      },
+      "id": "split-profiles",
+      "name": "Split by GBP Profile",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [900, 300],
+      "notes": "Processes one GBP profile at a time to avoid API rate limits"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are writing a Google Business Profile post for a local suburb profile.\n\nBusiness: {{ $('load-config').item.json.business_name }}\nIndustry: {{ $('load-config').item.json.industry }}\nSuburb: {{ $json.suburb }}\nCity: {{ $('load-config').item.json.city }}\nPost angle this week: {{ $json.post_angle }}\nCurrent season in Australia: {{ $json.current_season }}\nPrimary keyword for this suburb: {{ $('load-config').item.json.target_keywords.split(',')[0].trim() }} {{ $json.suburb }}\n\nPost angle definitions:\n- job_spotlight: Feature a recent job done in this suburb (even if fictional/representative)\n- seasonal_offer: A seasonal offer relevant to {{ $json.current_season }} and this industry\n- local_faq: Answer a common question specific to this suburb (local building types, weather, demographics)\n- community: Tie the business to something happening in {{ $json.suburb }} (local events, sports teams, council news)\n- behind_the_scenes: Show what it's like to work in {{ $json.suburb }} — the team, the day, the quirks\n- milestone: A milestone, award, or achievement, tied to our work in {{ $json.suburb }}\n\nWRITE THE POST NOW. Rules:\n- 200–300 words\n- Mention {{ $json.suburb }} at least 3 times naturally\n- Include the primary keyword at least twice\n- Reference at least 1 real local element (landmark, street, known characteristic)\n- End with an engagement question\n- NO corporate language, NO 'we pride ourselves'\n- Sound like a real local business owner who works in this area every week\n\nReturn JSON: { \"post_text\": \"...\", \"photo_brief\": \"50-word brief for a photo to accompany this post\" }"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-write-post",
+      "name": "Claude — Write Suburb GBP Post",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [1120, 300],
+      "notes": "Writes a unique, suburb-specific GBP post for this week's angle. Every profile gets different content."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://mybusiness.googleapis.com/v4/{{ $json.gbp_id }}/localPosts",
+        "authentication": "oAuth2",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"languageCode\": \"en-AU\",\n  \"summary\": \"{{ $('claude-write-post').item.json.post_text }}\",\n  \"callToAction\": {\n    \"actionType\": \"CALL\"\n  },\n  \"topicType\": \"STANDARD\"\n}"
+        },
+        "options": {}
+      },
+      "id": "publish-post",
+      "name": "Publish Post to GBP",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 300],
+      "notes": "Publishes the post to the suburb's GBP profile via Google My Business API"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "GBP Post Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ new Date().toISOString().split('T')[0] }}",
+            "suburb": "={{ $json.suburb }}",
+            "post_angle": "={{ $json.post_angle }}",
+            "post_preview": "={{ $('claude-write-post').item.json.post_text.substring(0, 100) }}",
+            "gbp_post_id": "={{ $json.name || 'pending' }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-post",
+      "name": "Log Post to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1560, 300],
+      "notes": "Tracks all published posts for content calendar visibility"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $runIndex === 0 }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-last-profile",
+      "name": "Last Profile in Batch?",
+      "type": "n8n-nodes-base.if",
+      "position": [1780, 300],
+      "notes": "Only sends the summary WhatsApp once, after all profiles are posted"
+    },
+    {
+      "parameters": {
+        "to": "={{ $('load-config').item.json.owner_whatsapp }}",
+        "message": "=📢 *Weekly GBP Posts Published*\n\n✅ {{ $('load-active-profiles').item.json.length }} suburb profiles updated\n🎨 This week's theme: *{{ $('assign-post-angles').item.json.post_angle.replace('_', ' ').toUpperCase() }}*\n\nAll posts are live. Google typically indexes new posts within 24 hours.\n\n_Next grid rank scan: this Wednesday 6am_"
+      },
+      "id": "whatsapp-posts-done",
+      "name": "WhatsApp — Posts Published Summary",
+      "type": "n8n-nodes-base.twilio",
+      "position": [2000, 200],
+      "notes": "Sends a single summary WhatsApp confirming all posts were published"
+    }
+  ],
+  "connections": {
+    "Weekly Wednesday 9am Cron": {
+      "main": [[
+        { "node": "Load All Active GBP Profiles", "type": "main", "index": 0 },
+        { "node": "Load Business Config", "type": "main", "index": 0 }
+      ]]
+    },
+    "Load All Active GBP Profiles": { "main": [[{ "node": "Assign Post Angles (Rotating Weekly)", "type": "main", "index": 0 }]] },
+    "Assign Post Angles (Rotating Weekly)": { "main": [[{ "node": "Split by GBP Profile", "type": "main", "index": 0 }]] },
+    "Split by GBP Profile": { "main": [[{ "node": "Claude — Write Suburb GBP Post", "type": "main", "index": 0 }]] },
+    "Claude — Write Suburb GBP Post": { "main": [[{ "node": "Publish Post to GBP", "type": "main", "index": 0 }]] },
+    "Publish Post to GBP": { "main": [[{ "node": "Log Post to Sheet", "type": "main", "index": 0 }]] },
+    "Log Post to Sheet": { "main": [[{ "node": "Last Profile in Batch?", "type": "main", "index": 0 }]] },
+    "Last Profile in Batch?": {
+      "main": [
+        [{ "node": "WhatsApp — Posts Published Summary", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "kit": "Kit 7 — City Presence Grid",
+    "workflow": "weekly-gbp-auto-poster",
+    "version": "1.0",
+    "description": "Posts unique, suburb-specific content to every active GBP profile every Wednesday. Rotates through 6 post angles (job spotlight, seasonal offer, local FAQ, community, behind-the-scenes, milestone). Each post mentions the suburb 3+ times and the target keyword 2+ times for maximum local rank signal."
+  }
+}
