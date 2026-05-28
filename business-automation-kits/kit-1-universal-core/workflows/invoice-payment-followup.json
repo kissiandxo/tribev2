@@ -1,0 +1,279 @@
+{
+  "name": "Kit 1 — Invoice & Payment Follow-up",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 7,
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-daily-7am",
+      "name": "Daily 7am Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "notes": "Fires every day at 7am to check unpaid invoices"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Invoices",
+        "options": {}
+      },
+      "id": "read-invoices",
+      "name": "Read Invoices Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 300],
+      "notes": "Columns: invoice_id, client_name, client_email, client_phone, amount_due, due_date, status, invoice_url, days_overdue"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Filter to only unpaid invoices that need action\nconst today = new Date();\nconst invoices = $input.all();\nconst actionable = [];\n\nfor (const item of invoices) {\n  const inv = item.json;\n  if (inv.status === 'paid' || inv.status === 'cancelled') continue;\n  \n  const dueDate = new Date(inv.due_date);\n  const diffMs = today - dueDate;\n  const daysOverdue = Math.floor(diffMs / (1000 * 60 * 60 * 24));\n  const daysUntilDue = -daysOverdue;\n  \n  let actionType = null;\n  if (daysUntilDue === 1) actionType = 'reminder_due_tomorrow';\n  else if (daysOverdue === 1) actionType = 'followup_1_day_overdue';\n  else if (daysOverdue === 7) actionType = 'notice_7_days_overdue';\n  else if (daysOverdue === 14) actionType = 'final_notice_14_days';\n  \n  if (actionType) {\n    actionable.push({\n      json: {\n        ...inv,\n        days_overdue: daysOverdue,\n        days_until_due: daysUntilDue,\n        action_type: actionType\n      }\n    });\n  }\n}\n\nreturn actionable.length > 0 ? actionable : [{ json: { no_action_needed: true } }];"
+      },
+      "id": "filter-actionable-invoices",
+      "name": "Filter Actionable Invoices",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "notes": "Finds invoices due tomorrow, 1/7/14 days overdue"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "no-action-check",
+              "leftValue": "={{ $json.no_action_needed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-has-actions",
+      "name": "Has Invoices To Action?",
+      "type": "n8n-nodes-base.if",
+      "position": [900, 300],
+      "notes": "Skip if no invoices need action today"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a professional accounts assistant for {{ $env.BUSINESS_NAME }}.\n\nWrite an email for the following invoice situation:\n\nClient: {{ $json.client_name }}\nAmount Due: ${{ $json.amount_due }}\nDue Date: {{ $json.due_date }}\nAction Type: {{ $json.action_type }}\nInvoice URL: {{ $json.invoice_url }}\nDays Overdue: {{ $json.days_overdue }}\n\nEmail tone rules:\n- reminder_due_tomorrow: Friendly and warm. Mention the payment is due tomorrow. Keep it brief.\n- followup_1_day_overdue: Polite and understanding. Acknowledge they may have overlooked it. Include payment link.\n- notice_7_days_overdue: Firm but professional. Express concern. Request immediate payment. Mention possible late fees.\n- final_notice_14_days: Serious tone. State this is a final notice. Mention next steps if unpaid.\n\nBusiness name: {{ $env.BUSINESS_NAME }}\nBusiness phone: {{ $env.BUSINESS_PHONE }}\nBusiness email: {{ $env.BUSINESS_EMAIL }}\n\nReturn JSON with:\n{\n  \"subject\": \"email subject line\",\n  \"body\": \"full email body in plain text\",\n  \"urgency\": \"low|medium|high|critical\"\n}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-write-email",
+      "name": "Claude — Write Email Copy",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [1120, 200],
+      "notes": "Claude opus-4-7 writes personalised invoice email per client and situation"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Claude's JSON response\nconst claudeResponse = $input.item.json.content || $input.item.json.text || $input.item.json.output || '';\nlet emailContent;\ntry {\n  const jsonMatch = claudeResponse.match(/\\{[\\s\\S]*\\}/);\n  emailContent = jsonMatch ? JSON.parse(jsonMatch[0]) : { subject: 'Invoice Follow-up', body: claudeResponse, urgency: 'medium' };\n} catch(e) {\n  emailContent = { subject: 'Invoice Follow-up', body: claudeResponse, urgency: 'medium' };\n}\n\nreturn {\n  json: {\n    ...emailContent,\n    client_email: $('filter-actionable-invoices').item.json.client_email,\n    client_name: $('filter-actionable-invoices').item.json.client_name,\n    invoice_id: $('filter-actionable-invoices').item.json.invoice_id,\n    action_type: $('filter-actionable-invoices').item.json.action_type,\n    days_overdue: $('filter-actionable-invoices').item.json.days_overdue,\n    amount_due: $('filter-actionable-invoices').item.json.amount_due,\n    client_phone: $('filter-actionable-invoices').item.json.client_phone\n  }\n};"
+      },
+      "id": "parse-claude-email",
+      "name": "Parse Claude Email Response",
+      "type": "n8n-nodes-base.code",
+      "position": [1340, 200],
+      "notes": "Extracts subject and body from Claude's JSON response"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.client_email }}",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.body }}",
+        "options": {
+          "senderName": "={{ $env.BUSINESS_NAME }}"
+        }
+      },
+      "id": "send-invoice-email",
+      "name": "Send Invoice Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [1560, 200],
+      "notes": "Sends the invoice follow-up email via Gmail"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "final-notice-check",
+              "leftValue": "={{ $json.action_type }}",
+              "rightValue": "final_notice_14_days",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-final-notice",
+      "name": "Is 14-Day Final Notice?",
+      "type": "n8n-nodes-base.if",
+      "position": [1780, 200],
+      "notes": "Only send WhatsApp to owner on 14-day final notice"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "=⚠️ FINAL NOTICE SENT — Invoice Alert\n\nClient: {{ $('parse-claude-email').item.json.client_name }}\nAmount: ${{ $('parse-claude-email').item.json.amount_due }}\nDays Overdue: {{ $('parse-claude-email').item.json.days_overdue }}\n\nFinal notice email sent. Consider calling them directly.\nPhone: {{ $('parse-claude-email').item.json.client_phone }}"
+      },
+      "id": "whatsapp-owner-final",
+      "name": "WhatsApp Owner — Final Notice Alert",
+      "type": "n8n-nodes-base.twilio",
+      "position": [2000, 100],
+      "notes": "Alerts owner via WhatsApp when a 14-day final notice is sent"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Invoices",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "invoice_id": "={{ $('parse-claude-email').item.json.invoice_id }}",
+            "status": "=follow_up_sent_{{ $('parse-claude-email').item.json.action_type }}",
+            "last_contact_date": "={{ new Date().toISOString().split('T')[0] }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "update-invoice-status",
+      "name": "Update Invoice Status in Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [2000, 300],
+      "notes": "Updates invoice status after action is taken"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Build morning WhatsApp summary for owner\nconst allInvoices = $input.all();\nconst totalPending = allInvoices.filter(i => i.json.action_type).length;\nconst overdue = allInvoices.filter(i => i.json.days_overdue > 0);\nconst totalOverdueAmount = overdue.reduce((sum, i) => sum + parseFloat(i.json.amount_due || 0), 0);\n\nconst summary = `📊 Morning Invoice Summary — ${new Date().toLocaleDateString('en-AU')}\n\nActions taken today: ${totalPending}\nOverdue invoices: ${overdue.length}\nTotal overdue amount: $${totalOverdueAmount.toFixed(2)}\n\nTop overdue:\n${overdue.slice(0, 3).map(i => `• ${i.json.client_name}: $${i.json.amount_due} (${i.json.days_overdue}d overdue)`).join('\\n')}`;\n\nreturn [{ json: { summary } }];"
+      },
+      "id": "build-morning-summary",
+      "name": "Build Morning Summary",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 440],
+      "notes": "Builds a WhatsApp morning summary for the owner"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "={{ $json.summary }}"
+      },
+      "id": "whatsapp-morning-summary",
+      "name": "Send Morning Summary to Owner",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1340, 440],
+      "notes": "Sends WhatsApp morning invoice summary to business owner"
+    }
+  ],
+  "connections": {
+    "Daily 7am Trigger": {
+      "main": [
+        [
+          { "node": "Read Invoices Sheet", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Invoices Sheet": {
+      "main": [
+        [
+          { "node": "Filter Actionable Invoices", "type": "main", "index": 0 },
+          { "node": "Build Morning Summary", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Filter Actionable Invoices": {
+      "main": [
+        [
+          { "node": "Has Invoices To Action?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Has Invoices To Action?": {
+      "main": [
+        [],
+        [
+          { "node": "Claude — Write Email Copy", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude — Write Email Copy": {
+      "main": [
+        [
+          { "node": "Parse Claude Email Response", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Claude Email Response": {
+      "main": [
+        [
+          { "node": "Send Invoice Email", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send Invoice Email": {
+      "main": [
+        [
+          { "node": "Is 14-Day Final Notice?", "type": "main", "index": 0 },
+          { "node": "Update Invoice Status in Sheet", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Is 14-Day Final Notice?": {
+      "main": [
+        [
+          { "node": "WhatsApp Owner — Final Notice Alert", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    },
+    "Build Morning Summary": {
+      "main": [
+        [
+          { "node": "Send Morning Summary to Owner", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null
+}
