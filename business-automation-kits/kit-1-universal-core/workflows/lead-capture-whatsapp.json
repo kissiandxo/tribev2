@@ -1,0 +1,183 @@
+{
+  "name": "Kit 1 — Lead Capture + WhatsApp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-lead",
+        "options": {}
+      },
+      "id": "webhook-new-lead",
+      "name": "New Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "notes": "POST /new-lead with: name, phone, email, source, message, service_interested_in"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a lead qualification assistant for {{ $env.BUSINESS_NAME }}, a {{ $env.BUSINESS_INDUSTRY }} business.\n\nAnalyse this incoming lead and classify it.\n\nLEAD DETAILS:\nName: {{ $json.name }}\nPhone: {{ $json.phone }}\nEmail: {{ $json.email }}\nSource: {{ $json.source }}\nService Interested In: {{ $json.service_interested_in }}\nMessage: {{ $json.message }}\n\nBUSINESS INFO:\nBusiness: {{ $env.BUSINESS_NAME }}\nIndustry: {{ $env.BUSINESS_INDUSTRY }}\nLocation: {{ $env.BUSINESS_CITY }}\n\nReturn JSON with:\n{\n  \"lead_score\": \"hot|warm|cold\",\n  \"score_reasoning\": \"Brief explanation of the score (1-2 sentences)\",\n  \"urgency\": \"immediate|this_week|no_rush\",\n  \"estimated_value\": \"low|medium|high\",\n  \"customer_whatsapp_message\": \"A warm, professional WhatsApp message to send the customer confirming we received their enquiry and giving an ETA for response. 2-3 sentences. Use their first name. Sign off with business name.\",\n  \"owner_alert_message\": \"A concise WhatsApp alert for the business owner. Include: lead name, score, service interested in, quick summary of message, and a suggested first response. Max 250 chars.\",\n  \"hot_lead_email_subject\": \"Email subject for hot lead immediate response (only if hot)\",\n  \"hot_lead_email_body\": \"Personalised email body for hot lead immediate response (only if hot). Should be warm, mention their specific service interest, offer a specific next step like booking a call or getting a quote.\"\n}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-classify-lead",
+      "name": "Claude — Classify Lead",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [460, 300],
+      "notes": "Claude classifies lead as hot/warm/cold and drafts all response messages"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Claude's response\nconst claudeOutput = $input.item.json.content || $input.item.json.text || $input.item.json.output || '';\nlet classification;\ntry {\n  const jsonMatch = claudeOutput.match(/\\{[\\s\\S]*\\}/);\n  classification = jsonMatch ? JSON.parse(jsonMatch[0]) : { lead_score: 'warm', customer_whatsapp_message: 'Thank you for your enquiry! We will be in touch shortly.', owner_alert_message: 'New lead received.' };\n} catch(e) {\n  classification = { lead_score: 'warm', customer_whatsapp_message: 'Thank you for your enquiry! We will be in touch shortly.', owner_alert_message: 'New lead received.' };\n}\n\n// Merge with original lead data\nconst lead = $('New Lead Webhook').item.json;\nreturn {\n  json: {\n    ...classification,\n    name: lead.name,\n    phone: lead.phone,\n    email: lead.email,\n    source: lead.source,\n    message: lead.message,\n    service_interested_in: lead.service_interested_in,\n    date_received: new Date().toISOString()\n  }\n};"
+      },
+      "id": "parse-lead-classification",
+      "name": "Parse Lead Classification",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "notes": "Parses Claude's JSON and merges with original lead data"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $json.phone }}",
+        "message": "={{ $json.customer_whatsapp_message }}"
+      },
+      "id": "whatsapp-customer-confirm",
+      "name": "WhatsApp — Confirm to Customer",
+      "type": "n8n-nodes-base.twilio",
+      "position": [900, 180],
+      "notes": "Immediately sends WhatsApp confirmation to the customer"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "=🔔 New Lead — {{ $json.lead_score.toUpperCase() }}\n\n{{ $json.owner_alert_message }}\n\nSource: {{ $json.source }}\nPhone: {{ $json.phone }}\nEmail: {{ $json.email }}"
+      },
+      "id": "whatsapp-owner-alert",
+      "name": "WhatsApp — Alert Owner",
+      "type": "n8n-nodes-base.twilio",
+      "position": [900, 300],
+      "notes": "Sends lead summary WhatsApp alert to the business owner"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "CRM",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "name": "={{ $json.name }}",
+            "phone": "={{ $json.phone }}",
+            "email": "={{ $json.email }}",
+            "source": "={{ $json.source }}",
+            "lead_score": "={{ $json.lead_score }}",
+            "service": "={{ $json.service_interested_in }}",
+            "message": "={{ $json.message }}",
+            "date": "={{ new Date().toISOString().split('T')[0] }}",
+            "status": "new",
+            "urgency": "={{ $json.urgency }}",
+            "estimated_value": "={{ $json.estimated_value }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "add-to-crm-sheet",
+      "name": "Add Lead to CRM Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [900, 420],
+      "notes": "Adds the lead to the CRM Google Sheets tab"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "hot-lead-check",
+              "leftValue": "={{ $json.lead_score }}",
+              "rightValue": "hot",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-hot-lead",
+      "name": "Is Hot Lead?",
+      "type": "n8n-nodes-base.if",
+      "position": [1120, 300],
+      "notes": "Routes hot leads to immediate email response within 2 minutes"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "={{ $json.hot_lead_email_subject || 'Re: Your enquiry with ' + $env.BUSINESS_NAME }}",
+        "message": "={{ $json.hot_lead_email_body || 'Thank you for your enquiry. We will be in touch shortly.' }}",
+        "options": {
+          "senderName": "={{ $env.BUSINESS_NAME }}"
+        }
+      },
+      "id": "send-hot-lead-email",
+      "name": "Send Hot Lead Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [1340, 200],
+      "notes": "Sends immediate personalised email to hot leads within 2 minutes of enquiry"
+    }
+  ],
+  "connections": {
+    "New Lead Webhook": {
+      "main": [
+        [
+          { "node": "Claude — Classify Lead", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude — Classify Lead": {
+      "main": [
+        [
+          { "node": "Parse Lead Classification", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Lead Classification": {
+      "main": [
+        [
+          { "node": "WhatsApp — Confirm to Customer", "type": "main", "index": 0 },
+          { "node": "WhatsApp — Alert Owner", "type": "main", "index": 0 },
+          { "node": "Add Lead to CRM Sheet", "type": "main", "index": 0 },
+          { "node": "Is Hot Lead?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Is Hot Lead?": {
+      "main": [
+        [
+          { "node": "Send Hot Lead Email", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "kit": "Kit 1 — Universal Business Core",
+    "workflow": "lead-capture-whatsapp",
+    "version": "1.0",
+    "description": "Webhook receives new leads from any source (website form, FB ad, chatbot). Claude classifies as hot/warm/cold. Immediately sends WhatsApp confirmation to customer and alert to owner. Adds lead to CRM Google Sheet. Hot leads also receive an immediate personalised email within 2 minutes."
+  }
+}

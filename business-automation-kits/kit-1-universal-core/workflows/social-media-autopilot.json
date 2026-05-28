@@ -1,0 +1,240 @@
+{
+  "name": "Kit 1 — Social Media Autopilot",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 2,4"
+            }
+          ]
+        }
+      },
+      "id": "cron-tue-thu-9am",
+      "name": "Tue & Thu 9am Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "notes": "Fires every Tuesday and Thursday at 9am"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Content Calendar",
+        "options": {}
+      },
+      "id": "read-content-calendar",
+      "name": "Read Content Calendar",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 300],
+      "notes": "Columns: week, content_theme, recent_job_example, promotion_if_any"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Find this week's content row\nconst now = new Date();\nconst weekNum = Math.ceil((now - new Date(now.getFullYear(), 0, 1)) / (7 * 24 * 60 * 60 * 1000));\nconst rows = $input.all();\n\n// Try to find this week's row, fall back to most recent\nlet thisWeek = rows.find(r => r.json.week == weekNum) || rows[rows.length - 1];\n\nif (!thisWeek) {\n  return [{ json: { error: 'No content calendar rows found', week: weekNum } }];\n}\n\nreturn [{\n  json: {\n    week: weekNum,\n    content_theme: thisWeek.json.content_theme || 'Our Services',\n    recent_job_example: thisWeek.json.recent_job_example || '',\n    promotion_if_any: thisWeek.json.promotion_if_any || '',\n    post_date: now.toISOString().split('T')[0]\n  }\n}];"
+      },
+      "id": "get-this-weeks-content",
+      "name": "Get This Week's Content",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "notes": "Finds the content calendar row for the current week"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are the social media manager for {{ $env.BUSINESS_NAME }}, a {{ $env.BUSINESS_INDUSTRY }} business based in {{ $env.BUSINESS_CITY }}.\n\nCreate 3 social media posts for today based on this week's content brief:\n\nContent Theme: {{ $json.content_theme }}\nRecent Job Example: {{ $json.recent_job_example }}\nPromotion (if any): {{ $json.promotion_if_any }}\nPost Date: {{ $json.post_date }}\n\nBusiness Details:\n- Name: {{ $env.BUSINESS_NAME }}\n- Industry: {{ $env.BUSINESS_INDUSTRY }}\n- City: {{ $env.BUSINESS_CITY }}\n- Phone: {{ $env.BUSINESS_PHONE }}\n- Website: {{ $env.BUSINESS_WEBSITE }}\n\nWrite 3 posts — one for each platform. Each must be unique, not just slightly rephrased:\n\n1. FACEBOOK POST:\n   - 100-200 words\n   - Conversational, community-focused tone\n   - Tell a story or share a tip related to the theme\n   - Include a clear CTA (call, book, visit website)\n   - No hashtags on Facebook (they look spammy)\n\n2. INSTAGRAM POST:\n   - 80-120 words for the caption\n   - More visual and aspirational\n   - Use 5-8 highly relevant hashtags at the end\n   - Include a CTA in the caption\n   - Emoji use: natural and sparingly (2-4 max)\n\n3. GOOGLE BUSINESS PROFILE POST:\n   - 150-300 characters (strict limit)\n   - Professional and local-search-optimised\n   - Mention the city/location naturally\n   - Include a CTA button suggestion: CALL/BOOK/LEARN_MORE/ORDER\n\nReturn as JSON:\n{\n  \"facebook\": {\n    \"message\": \"full post text\"\n  },\n  \"instagram\": {\n    \"caption\": \"caption text with hashtags at end\",\n    \"hashtags\": [\"hashtag1\", \"hashtag2\"]\n  },\n  \"google_business_profile\": {\n    \"summary\": \"post text under 300 chars\",\n    \"cta_type\": \"CALL|BOOK|LEARN_MORE|ORDER\",\n    \"cta_url\": \"{{ $env.BUSINESS_WEBSITE }}\"\n  }\n}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-generate-posts",
+      "name": "Claude — Generate 3 Social Posts",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [900, 300],
+      "notes": "Claude claude-opus-4-7 generates unique posts for Facebook, Instagram, and Google Business Profile"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Claude's post content\nconst claudeOutput = $input.item.json.content || $input.item.json.text || $input.item.json.output || '';\nlet posts;\ntry {\n  const jsonMatch = claudeOutput.match(/\\{[\\s\\S]*\\}/);\n  posts = jsonMatch ? JSON.parse(jsonMatch[0]) : {};\n} catch(e) {\n  posts = { parse_error: e.message, raw: claudeOutput };\n}\n\nreturn {\n  json: {\n    ...posts,\n    content_theme: $('Get This Week\\'s Content').item.json.content_theme,\n    post_date: $('Get This Week\\'s Content').item.json.post_date\n  }\n};"
+      },
+      "id": "parse-posts",
+      "name": "Parse Generated Posts",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "notes": "Extracts the three posts from Claude's JSON response"
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v19.0/{{ $env.FACEBOOK_PAGE_ID }}/feed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"message\": {{ JSON.stringify($json.facebook.message) }},\n  \"access_token\": \"{{ $env.FACEBOOK_PAGE_ACCESS_TOKEN }}\"\n}",
+        "options": {}
+      },
+      "id": "post-to-facebook",
+      "name": "Post to Facebook Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 120],
+      "notes": "Posts to Facebook Page via Graph API"
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v19.0/{{ $env.INSTAGRAM_ACCOUNT_ID }}/media",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"caption\": {{ JSON.stringify($json.instagram.caption) }},\n  \"image_url\": \"{{ $env.INSTAGRAM_DEFAULT_IMAGE_URL || 'https://via.placeholder.com/1080x1080.png?text=' + encodeURIComponent($env.BUSINESS_NAME) }}\",\n  \"access_token\": \"{{ $env.FACEBOOK_PAGE_ACCESS_TOKEN }}\"\n}",
+        "options": {}
+      },
+      "id": "create-instagram-media",
+      "name": "Create Instagram Media Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 260],
+      "notes": "Step 1 of Instagram posting: creates media container via Graph API"
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v19.0/{{ $env.INSTAGRAM_ACCOUNT_ID }}/media_publish",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"creation_id\": \"{{ $json.id }}\",\n  \"access_token\": \"{{ $env.FACEBOOK_PAGE_ACCESS_TOKEN }}\"\n}",
+        "options": {}
+      },
+      "id": "publish-instagram-post",
+      "name": "Publish Instagram Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1560, 260],
+      "notes": "Step 2 of Instagram posting: publishes the media container"
+    },
+    {
+      "parameters": {
+        "url": "=https://mybusiness.googleapis.com/v4/accounts/{{ $env.GOOGLE_BUSINESS_ACCOUNT_ID }}/locations/{{ $env.GOOGLE_BUSINESS_LOCATION_ID }}/localPosts",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"languageCode\": \"en\",\n  \"summary\": {{ JSON.stringify($('Parse Generated Posts').item.json.google_business_profile.summary) }},\n  \"callToAction\": {\n    \"actionType\": \"{{ $('Parse Generated Posts').item.json.google_business_profile.cta_type || 'LEARN_MORE' }}\",\n    \"url\": \"{{ $env.BUSINESS_WEBSITE }}\"\n  },\n  \"topicType\": \"STANDARD\"\n}",
+        "options": {
+          "headers": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $env.GOOGLE_BUSINESS_ACCESS_TOKEN }}"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "post-to-gbp",
+      "name": "Post to Google Business Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 420],
+      "notes": "Posts to Google Business Profile via GBP API"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Post Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ $('Parse Generated Posts').item.json.post_date }}",
+            "content_theme": "={{ $('Parse Generated Posts').item.json.content_theme }}",
+            "facebook_post": "={{ $('Parse Generated Posts').item.json.facebook?.message?.substring(0, 200) }}",
+            "instagram_caption": "={{ $('Parse Generated Posts').item.json.instagram?.caption?.substring(0, 200) }}",
+            "gbp_post": "={{ $('Parse Generated Posts').item.json.google_business_profile?.summary }}",
+            "status": "posted",
+            "timestamp": "={{ new Date().toISOString() }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-posts",
+      "name": "Log Posts to Post Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1780, 300],
+      "notes": "Logs all published posts to the Post Log Google Sheets tab"
+    }
+  ],
+  "connections": {
+    "Tue & Thu 9am Trigger": {
+      "main": [
+        [
+          { "node": "Read Content Calendar", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Content Calendar": {
+      "main": [
+        [
+          { "node": "Get This Week's Content", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get This Week's Content": {
+      "main": [
+        [
+          { "node": "Claude — Generate 3 Social Posts", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude — Generate 3 Social Posts": {
+      "main": [
+        [
+          { "node": "Parse Generated Posts", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Generated Posts": {
+      "main": [
+        [
+          { "node": "Post to Facebook Page", "type": "main", "index": 0 },
+          { "node": "Create Instagram Media Container", "type": "main", "index": 0 },
+          { "node": "Post to Google Business Profile", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Create Instagram Media Container": {
+      "main": [
+        [
+          { "node": "Publish Instagram Post", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Post to Facebook Page": {
+      "main": [
+        [
+          { "node": "Log Posts to Post Log", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Post to Google Business Profile": {
+      "main": [
+        [
+          { "node": "Log Posts to Post Log", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "kit": "Kit 1 — Universal Business Core",
+    "workflow": "social-media-autopilot",
+    "version": "1.0",
+    "description": "Every Tuesday and Thursday at 9am, reads the Content Calendar Google Sheet and uses Claude to generate 3 unique posts (Facebook, Instagram, Google Business Profile). Posts automatically to all three platforms via their respective APIs. Logs all posts to the Post Log sheet."
+  }
+}

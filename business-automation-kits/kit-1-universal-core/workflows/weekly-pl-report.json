@@ -1,0 +1,207 @@
+{
+  "name": "Kit 1 — Weekly P&L Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 17 * * 5"
+            }
+          ]
+        }
+      },
+      "id": "cron-friday-5pm",
+      "name": "Every Friday 5pm",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "notes": "Fires every Friday at 5pm to generate weekly P&L report"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Invoices",
+        "options": {}
+      },
+      "id": "read-invoices",
+      "name": "Read Invoices (Revenue)",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 180],
+      "notes": "Reads all invoices for revenue calculation this week"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Expenses",
+        "options": {}
+      },
+      "id": "read-expenses",
+      "name": "Read Expenses Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 300],
+      "notes": "Reads all expenses for cost calculation"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Support Log",
+        "options": {}
+      },
+      "id": "read-support-log",
+      "name": "Read Support Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 420],
+      "notes": "Reads support ticket volume for the week"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Aggregate data from all three sheets for P&L calculation\n// This node runs after all three reads are complete\nconst allItems = $input.all();\n\n// Get week boundaries (Monday to Friday)\nconst now = new Date();\nconst dayOfWeek = now.getDay();\nconst monday = new Date(now);\nmonday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));\nmonday.setHours(0, 0, 0, 0);\nconst friday = new Date(now);\nfriday.setHours(23, 59, 59, 999);\n\n// We pass the week boundaries for Claude context\nreturn [{\n  json: {\n    week_start: monday.toISOString().split('T')[0],\n    week_end: friday.toISOString().split('T')[0],\n    report_generated: now.toISOString(),\n    business_name: process.env.BUSINESS_NAME || '{{$env.BUSINESS_NAME}}'\n  }\n}];"
+      },
+      "id": "prepare-report-context",
+      "name": "Prepare Report Context",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "notes": "Calculates week date range and prepares context for Claude"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are the financial reporting assistant for {{ $env.BUSINESS_NAME }}.\n\nGenerate a weekly P&L summary report for the week of {{ $json.week_start }} to {{ $json.week_end }}.\n\nINVOICES DATA (Revenue):\n{{ JSON.stringify($('Read Invoices (Revenue)').all().map(i => i.json), null, 2) }}\n\nEXPENSES DATA:\n{{ JSON.stringify($('Read Expenses Sheet').all().map(i => i.json), null, 2) }}\n\nSUPPORT LOG DATA:\n{{ JSON.stringify($('Read Support Log').all().map(i => i.json), null, 2) }}\n\nCalculate and return a JSON report with these exact fields:\n{\n  \"week_start\": \"YYYY-MM-DD\",\n  \"week_end\": \"YYYY-MM-DD\",\n  \"gross_revenue\": 0.00,\n  \"total_expenses\": 0.00,\n  \"net_profit\": 0.00,\n  \"profit_margin_pct\": 0.0,\n  \"top_client_name\": \"name\",\n  \"top_client_revenue\": 0.00,\n  \"busiest_day\": \"Monday\",\n  \"invoices_paid\": 0,\n  \"invoices_outstanding\": 0,\n  \"open_invoices_total\": 0.00,\n  \"support_tickets_total\": 0,\n  \"support_tickets_resolved\": 0,\n  \"support_auto_resolved_pct\": 0.0,\n  \"key_action_next_week\": \"One specific, actionable recommendation for next week based on the data\",\n  \"performance_vs_prior_week\": \"Up/Down/Flat with brief context if data available\",\n  \"whatsapp_summary\": \"A concise WhatsApp-formatted summary (use emojis, keep under 400 chars) with the headline numbers and key action\"\n}\n\nFor whatsapp_summary, format it like:\n📊 Week of [date] P&L\\n\\n💰 Revenue: $X\\n📉 Expenses: $X\\n✅ Profit: $X ([X]%)\\n\\n🏆 Top client: [name]\\n📋 Open invoices: $X\\n🎫 Tickets: X resolved\\n\\n💡 Next week: [key action]"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-generate-report",
+      "name": "Claude — Generate P&L Report",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [900, 300],
+      "notes": "Claude claude-opus-4-7 generates full weekly P&L report from the raw data"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Claude's JSON response\nconst claudeOutput = $input.item.json.content || $input.item.json.text || $input.item.json.output || '';\nlet report;\ntry {\n  const jsonMatch = claudeOutput.match(/\\{[\\s\\S]*\\}/);\n  report = jsonMatch ? JSON.parse(jsonMatch[0]) : { whatsapp_summary: claudeOutput, week_start: new Date().toISOString().split('T')[0] };\n} catch(e) {\n  report = { whatsapp_summary: claudeOutput, week_start: new Date().toISOString().split('T')[0], parse_error: e.message };\n}\nreturn { json: report };"
+      },
+      "id": "parse-report",
+      "name": "Parse Report JSON",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "notes": "Extracts structured report data from Claude's response"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "={{ $json.whatsapp_summary }}"
+      },
+      "id": "send-whatsapp-report",
+      "name": "Send P&L Report via WhatsApp",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1340, 200],
+      "notes": "Sends the weekly P&L summary to the owner via WhatsApp"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Weekly Reports",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "week_start": "={{ $json.week_start }}",
+            "week_end": "={{ $json.week_end }}",
+            "gross_revenue": "={{ $json.gross_revenue }}",
+            "total_expenses": "={{ $json.total_expenses }}",
+            "net_profit": "={{ $json.net_profit }}",
+            "profit_margin_pct": "={{ $json.profit_margin_pct }}",
+            "top_client": "={{ $json.top_client_name }}",
+            "open_invoices_total": "={{ $json.open_invoices_total }}",
+            "support_tickets_resolved": "={{ $json.support_tickets_resolved }}",
+            "key_action_next_week": "={{ $json.key_action_next_week }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "save-report-to-sheets",
+      "name": "Save Report to Weekly Reports Tab",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1340, 400],
+      "notes": "Saves the weekly P&L report to Google Sheets for historical tracking"
+    }
+  ],
+  "connections": {
+    "Every Friday 5pm": {
+      "main": [
+        [
+          { "node": "Read Invoices (Revenue)", "type": "main", "index": 0 },
+          { "node": "Read Expenses Sheet", "type": "main", "index": 0 },
+          { "node": "Read Support Log", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Invoices (Revenue)": {
+      "main": [
+        [
+          { "node": "Prepare Report Context", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Expenses Sheet": {
+      "main": [
+        [
+          { "node": "Prepare Report Context", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Support Log": {
+      "main": [
+        [
+          { "node": "Prepare Report Context", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Prepare Report Context": {
+      "main": [
+        [
+          { "node": "Claude — Generate P&L Report", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude — Generate P&L Report": {
+      "main": [
+        [
+          { "node": "Parse Report JSON", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Parse Report JSON": {
+      "main": [
+        [
+          { "node": "Send P&L Report via WhatsApp", "type": "main", "index": 0 },
+          { "node": "Save Report to Weekly Reports Tab", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "kit": "Kit 1 — Universal Business Core",
+    "workflow": "weekly-pl-report",
+    "version": "1.0",
+    "description": "Every Friday at 5pm, reads revenue, expenses, and support data from Google Sheets. Claude generates a full P&L summary including gross revenue, net profit, top client, busiest day, open invoices, and a key action recommendation for next week. Sends via WhatsApp and saves to Google Sheets."
+  }
+}
