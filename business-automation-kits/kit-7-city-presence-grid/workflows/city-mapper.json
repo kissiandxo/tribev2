@@ -1,0 +1,137 @@
+{
+  "name": "Kit 7 — City Mapper (Suburb Tier Assignment)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "city-mapper-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-intake",
+      "name": "Intake Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "notes": "Receives: business_name, city, service_radius_km, industry, owner_whatsapp"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://nominatim.openstreetmap.org/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "q", "value": "={{ $json.city }}, Australia" },
+            { "name": "format", "value": "json" },
+            { "name": "limit", "value": "1" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "geocode-city",
+      "name": "Geocode City Centre",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 300],
+      "notes": "Gets lat/lng of city centre for radius calculations"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "location", "value": "={{ $json[0].lat }},{{ $json[0].lon }}" },
+            { "name": "radius", "value": "={{ $('Intake Webhook').item.json.service_radius_km * 1000 }}" },
+            { "name": "type", "value": "sublocality" },
+            { "name": "key", "value": "={{ $env.GOOGLE_MAPS_API_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-suburbs",
+      "name": "Get All Suburbs In Radius",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 300],
+      "notes": "Returns all suburb/locality names within the radius. Falls back to postcode lookup if empty."
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a local SEO strategist specialising in Australian markets.\n\nBusiness: {{ $('Intake Webhook').item.json.business_name }}\nIndustry: {{ $('Intake Webhook').item.json.industry }}\nCity: {{ $('Intake Webhook').item.json.city }}\nService Radius: {{ $('Intake Webhook').item.json.service_radius_km }}km\n\nSuburbs found within radius:\n{{ JSON.stringify($json.results.map(r => r.name), null, 2) }}\n\nAssign each suburb a priority tier:\n- Tier 1: High commercial density, high population, high search volume for this industry — top 20 max\n- Tier 2: Residential areas with medium volume — next 40\n- Tier 3: Outer fringe, low volume but still worth targeting — remainder\n\nAlso for each Tier 1 suburb, list:\n- Estimated monthly search volume for '[industry] + [suburb]' (rough)\n- Key local landmarks or identifiers (for landing page copy)\n- Any industry-specific notes (e.g. 'heritage homes = more plumbing work')\n\nReturn as JSON:\n{\n  \"tier1\": [{\"name\": \"...\", \"lat\": ..., \"lng\": ..., \"monthly_searches\": ..., \"landmarks\": \"...\", \"notes\": \"...\"}],\n  \"tier2\": [{\"name\": \"...\", \"lat\": ..., \"lng\": ...\"}],\n  \"tier3\": [{\"name\": \"...\", \"lat\": ..., \"lng\": ...\"}],\n  \"total_suburbs\": ...,\n  \"recommended_gbp_profiles\": ...\n}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-tier",
+      "name": "Claude — Tier Assignment",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [900, 300],
+      "notes": "Claude assigns each suburb to Tier 1/2/3 based on commercial density and industry relevance"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "Suburb Tiers",
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        },
+        "options": {}
+      },
+      "id": "save-to-sheets",
+      "name": "Save Tier Map to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1120, 300],
+      "notes": "Saves the full suburb tier map for use by GBP builder, landing page generator, and grid scanner"
+    },
+    {
+      "parameters": {
+        "to": "={{ $('Intake Webhook').item.json.owner_whatsapp }}",
+        "message": "=✅ *City mapped for {{ $('Intake Webhook').item.json.business_name }}*\n\n🗺️ *{{ $json.total_suburbs }} suburbs* found within {{ $('Intake Webhook').item.json.service_radius_km }}km radius.\n\n🟢 *Tier 1 (priority targets):* {{ $json.tier1.length }} suburbs\n{{ $json.tier1.slice(0,8).map(s => '• ' + s.name).join('\\n') }}{{ $json.tier1.length > 8 ? '\\n+ ' + ($json.tier1.length - 8) + ' more...' : '' }}\n\n🟡 *Tier 2:* {{ $json.tier2.length }} suburbs\n🔵 *Tier 3:* {{ $json.tier3.length }} suburbs\n\n📋 *Recommended GBP profiles to build:* {{ $json.recommended_gbp_profiles }}\n\n⚙️ Next: GBP Network Builder is starting now..."
+      },
+      "id": "whatsapp-owner",
+      "name": "WhatsApp — City Map Complete",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1340, 300],
+      "notes": "Notifies owner with suburb tier breakdown. Uses Twilio WhatsApp API."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.N8N_WEBHOOK_BASE_URL }}/gbp-network-builder",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ business_name: $('Intake Webhook').item.json.business_name, industry: $('Intake Webhook').item.json.industry, owner_whatsapp: $('Intake Webhook').item.json.owner_whatsapp, tier1_suburbs: $json.tier1, tier2_suburbs: $json.tier2 }) }}"
+        },
+        "options": {}
+      },
+      "id": "trigger-gbp-builder",
+      "name": "Trigger GBP Network Builder",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1560, 300],
+      "notes": "Passes tier map to the GBP Network Builder workflow to start building suburb profiles"
+    }
+  ],
+  "connections": {
+    "Intake Webhook": { "main": [[{ "node": "Geocode City Centre", "type": "main", "index": 0 }]] },
+    "Geocode City Centre": { "main": [[{ "node": "Get All Suburbs In Radius", "type": "main", "index": 0 }]] },
+    "Get All Suburbs In Radius": { "main": [[{ "node": "Claude — Tier Assignment", "type": "main", "index": 0 }]] },
+    "Claude — Tier Assignment": { "main": [[{ "node": "Save Tier Map to Google Sheets", "type": "main", "index": 0 }]] },
+    "Save Tier Map to Google Sheets": { "main": [[{ "node": "WhatsApp — City Map Complete", "type": "main", "index": 0 }]] },
+    "WhatsApp — City Map Complete": { "main": [[{ "node": "Trigger GBP Network Builder", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "kit": "Kit 7 — City Presence Grid",
+    "workflow": "city-mapper",
+    "version": "1.0",
+    "description": "Maps the entire city into tiered suburb targets. Geocodes every suburb within radius, assigns Tier 1/2/3 priority using Claude, saves to Sheets, notifies owner via WhatsApp, and triggers the GBP Network Builder."
+  }
+}

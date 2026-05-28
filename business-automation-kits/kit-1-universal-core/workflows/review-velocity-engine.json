@@ -1,0 +1,291 @@
+{
+  "name": "Kit 1 — Review Velocity Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "review-request",
+        "options": {}
+      },
+      "id": "webhook-job-complete",
+      "name": "Job Completed Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "notes": "POST /review-request with: job_id, customer_name, customer_phone, customer_email, service_type, completion_date"
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "hours"
+      },
+      "id": "wait-2-hours",
+      "name": "Wait 2 Hours",
+      "type": "n8n-nodes-base.wait",
+      "position": [460, 300],
+      "notes": "Wait 2 hours after job completion before sending review request"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $('Job Completed Webhook').item.json.customer_phone }}",
+        "message": "=Hi {{ $('Job Completed Webhook').item.json.customer_name }}! 👋\n\nThank you for choosing {{ $env.BUSINESS_NAME }} for your {{ $('Job Completed Webhook').item.json.service_type }} today.\n\nWe'd really appreciate it if you could leave us a quick Google review — it takes less than 60 seconds and helps other locals find us:\n\n⭐ {{ $env.GOOGLE_REVIEW_LINK }}\n\nThank you so much!\n{{ $env.BUSINESS_NAME }} Team"
+      },
+      "id": "send-review-request-wa",
+      "name": "Send Review Request WhatsApp",
+      "type": "n8n-nodes-base.twilio",
+      "position": [680, 300],
+      "notes": "Sends WhatsApp asking for a Google review"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Reviews",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "job_id": "={{ $('Job Completed Webhook').item.json.job_id }}",
+            "customer_name": "={{ $('Job Completed Webhook').item.json.customer_name }}",
+            "customer_phone": "={{ $('Job Completed Webhook').item.json.customer_phone }}",
+            "customer_email": "={{ $('Job Completed Webhook').item.json.customer_email }}",
+            "service_type": "={{ $('Job Completed Webhook').item.json.service_type }}",
+            "completion_date": "={{ $('Job Completed Webhook').item.json.completion_date }}",
+            "review_request_sent": "={{ new Date().toISOString() }}",
+            "status": "requested"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-review-request",
+      "name": "Log Review Request to Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [900, 300],
+      "notes": "Logs the review request to the Reviews tab"
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "days"
+      },
+      "id": "wait-3-days",
+      "name": "Wait 3 Days for Review",
+      "type": "n8n-nodes-base.wait",
+      "position": [1120, 300],
+      "notes": "Wait 3 days before sending follow-up if no review"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $('Job Completed Webhook').item.json.customer_phone }}",
+        "message": "=Hi {{ $('Job Completed Webhook').item.json.customer_name }}! 😊\n\nJust a friendly reminder — if you had a moment, we'd be so grateful for a quick Google review:\n\n⭐ {{ $env.GOOGLE_REVIEW_LINK }}\n\nYour feedback genuinely helps our small business grow. Thank you!\n– {{ $env.BUSINESS_NAME }}"
+      },
+      "id": "send-followup-sms",
+      "name": "Send Follow-up SMS",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1340, 300],
+      "notes": "3-day follow-up SMS if no review posted"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8,
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-daily-reviews",
+      "name": "Daily 8am Review Check",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 560],
+      "notes": "Checks for new Google reviews every day at 8am"
+    },
+    {
+      "parameters": {
+        "url": "=https://maps.googleapis.com/maps/api/place/details/json?place_id={{ $env.GOOGLE_PLACE_ID }}&fields=reviews&key={{ $env.GOOGLE_MAPS_API_KEY }}",
+        "options": {}
+      },
+      "id": "fetch-google-reviews",
+      "name": "Fetch Google Reviews",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 560],
+      "notes": "Calls Google Places API to get latest reviews"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Find reviews posted in the last 24 hours\nconst result = $input.first().json;\nconst reviews = result.result?.reviews || [];\nconst oneDayAgo = Math.floor(Date.now() / 1000) - 86400;\n\nconst newReviews = reviews.filter(r => r.time > oneDayAgo);\nreturn newReviews.map(r => ({ json: r }));"
+      },
+      "id": "filter-new-reviews",
+      "name": "Filter New Reviews (Last 24h)",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 560],
+      "notes": "Extracts reviews posted in the past 24 hours"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "=⭐ New Google Review!\n\nFrom: {{ $json.author_name }}\nRating: {{ $json.rating }}/5\n\n\"{{ $json.text.substring(0, 200) }}\"\n\nReview link: {{ $env.GOOGLE_REVIEW_LINK }}"
+      },
+      "id": "notify-owner-new-review",
+      "name": "Notify Owner — New Review",
+      "type": "n8n-nodes-base.twilio",
+      "position": [900, 560],
+      "notes": "WhatsApp alert to owner about new review"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=Write a professional, warm reply to this Google review for {{ $env.BUSINESS_NAME }}.\n\nReviewer: {{ $json.author_name }}\nRating: {{ $json.rating }}/5 stars\nReview: {{ $json.text }}\n\nGuidelines:\n- Thank them by first name\n- Mention the specific service if they mentioned it\n- Keep it under 100 words\n- Sound human and genuine, not corporate\n- If 4-5 stars: warm and grateful\n- If 1-3 stars: empathetic, apologetic, offer to make it right, include business phone\n- End with the business name\n\nReturn only the reply text, no JSON wrapper."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-generate-reply",
+      "name": "Claude — Generate Review Reply",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [1120, 560],
+      "notes": "Claude writes a personalised reply to the Google review"
+    },
+    {
+      "parameters": {
+        "url": "=https://mybusiness.googleapis.com/v4/accounts/{{ $env.GOOGLE_BUSINESS_ACCOUNT_ID }}/locations/{{ $env.GOOGLE_BUSINESS_LOCATION_ID }}/reviews/{{ $json.review_id }}/reply",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "comment",
+              "value": "={{ $json.content || $json.text || $json.output }}"
+            }
+          ]
+        },
+        "options": {
+          "headers": {
+            "parameters": [
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $env.GOOGLE_BUSINESS_ACCESS_TOKEN }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "post-review-reply",
+      "name": "Post Reply via GBP API",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 560],
+      "notes": "Posts Claude's reply to Google Business Profile via API"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Reviews",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "reviewer_name": "={{ $('filter-new-reviews').item.json.author_name }}",
+            "rating": "={{ $('filter-new-reviews').item.json.rating }}",
+            "review_text": "={{ $('filter-new-reviews').item.json.text }}",
+            "review_date": "={{ new Date($('filter-new-reviews').item.json.time * 1000).toISOString() }}",
+            "reply_sent": "yes",
+            "reply_date": "={{ new Date().toISOString() }}",
+            "status": "replied"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-review-to-sheets",
+      "name": "Log Review to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1560, 560],
+      "notes": "Logs all new reviews and replies to the Reviews tab"
+    }
+  ],
+  "connections": {
+    "Job Completed Webhook": {
+      "main": [
+        [
+          { "node": "Wait 2 Hours", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Wait 2 Hours": {
+      "main": [
+        [
+          { "node": "Send Review Request WhatsApp", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send Review Request WhatsApp": {
+      "main": [
+        [
+          { "node": "Log Review Request to Sheets", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Log Review Request to Sheets": {
+      "main": [
+        [
+          { "node": "Wait 3 Days for Review", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Wait 3 Days for Review": {
+      "main": [
+        [
+          { "node": "Send Follow-up SMS", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Daily 8am Review Check": {
+      "main": [
+        [
+          { "node": "Fetch Google Reviews", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Fetch Google Reviews": {
+      "main": [
+        [
+          { "node": "Filter New Reviews (Last 24h)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Filter New Reviews (Last 24h)": {
+      "main": [
+        [
+          { "node": "Notify Owner — New Review", "type": "main", "index": 0 },
+          { "node": "Claude — Generate Review Reply", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude — Generate Review Reply": {
+      "main": [
+        [
+          { "node": "Post Reply via GBP API", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Post Reply via GBP API": {
+      "main": [
+        [
+          { "node": "Log Review to Google Sheets", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null
+}

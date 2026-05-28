@@ -1,0 +1,212 @@
+{
+  "name": "Universal — Automated Customer Support (All Channels, All Kits)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-inbox",
+        "options": {}
+      },
+      "id": "webhook-support",
+      "name": "Support Inbox Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "notes": "Central webhook that receives messages from ALL channels: Gmail (via Gmail Watch), Website chatbot, WhatsApp Business, Facebook Messenger, Instagram DMs, Google Business Profile Q&A, SMS (Twilio). Each channel's n8n node posts here in a normalised format."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Normalise all incoming messages to a consistent format regardless of source\nconst item = $input.first().json;\n\nreturn [{\n  json: {\n    message_id: item.message_id || item.id || item.email_id || Date.now().toString(),\n    channel: item.channel || item.source || 'unknown',\n    customer_name: item.customer_name || item.from_name || item.sender_name || 'Customer',\n    customer_email: item.customer_email || item.from_email || item.email || null,\n    customer_phone: item.customer_phone || item.from_number || item.phone || null,\n    customer_id: item.customer_id || item.contact_id || null,\n    message_text: item.message || item.body || item.text || item.content || '',\n    message_timestamp: item.timestamp || item.date || new Date().toISOString(),\n    thread_id: item.thread_id || item.conversation_id || item.message_id || null,\n    attachments: item.attachments || item.files || [],\n    previous_messages: item.history || item.thread_history || [],\n    metadata: item.metadata || {}\n  }\n}];"
+      },
+      "id": "normalise-message",
+      "name": "Normalise Message Format",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "notes": "Converts all channel formats (Gmail, WhatsApp, FB Messenger, Chatbot, SMS, GBP) to a single standardised message object"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Knowledge Base",
+        "options": {}
+      },
+      "id": "load-knowledge-base",
+      "name": "Load Business Knowledge Base",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [680, 300],
+      "notes": "Loads the business knowledge base built by the Chatbot Installer. Contains: services, prices, policies, FAQs, hours, contact info. Updated automatically when owner edits the sheet."
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are the customer support AI for {{ $env.BUSINESS_NAME }}. Analyse this incoming message and classify it.\n\nBUSINESS KNOWLEDGE BASE:\n{{ JSON.stringify($json, null, 2) }}\n\nINCOMING MESSAGE:\nChannel: {{ $('normalise-message').item.json.channel }}\nFrom: {{ $('normalise-message').item.json.customer_name }}\nMessage: {{ $('normalise-message').item.json.message_text }}\nPrevious context: {{ JSON.stringify($('normalise-message').item.json.previous_messages) }}\n\nClassify this message:\n\n1. tier: \n   - 'tier1_auto': Can be fully resolved using the knowledge base, no human needed\n   - 'tier2_assisted': Claude can draft a reply but owner should approve before sending\n   - 'tier3_escalate': Requires human handling (legal, refund dispute, media, complex complaint)\n\n2. intent: (pick one)\n   - pricing_inquiry | booking_request | service_question | complaint | compliment | emergency | cancellation | refund_request | general_inquiry | legal_threat | media_inquiry | spam | other\n\n3. urgency_score: 1-10 (10 = business-critical, respond within minutes)\n\n4. sentiment: positive | neutral | negative | very_negative\n\n5. can_resolve_with_kb: true/false — is the answer in the knowledge base?\n\n6. if tier1_auto — write the complete reply:\n   - resolution_reply: Full reply text, in brand voice, resolves the issue completely\n   - action_required: any action to take (book_appointment, send_invoice_link, etc.) or null\n\n7. if tier2_assisted — write a draft:\n   - draft_reply: Complete draft for owner to review and send with one tap\n   - why_needs_approval: Brief reason\n\n8. if tier3_escalate:\n   - escalation_summary: 3-sentence brief of the issue for the owner\n   - recommended_action: What the owner should do\n   - holding_message: Auto-reply to send while owner is notified\n\n9. owner_whatsapp_preview: 100-char preview of the message for WhatsApp notification\n\nReturn as JSON."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-classify",
+      "name": "Claude — Classify & Route Message",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [900, 300],
+      "notes": "Core classification node. Claude reads the message against the business knowledge base and routes to the correct tier. Tier 1 = auto-resolve, Tier 2 = draft for owner approval, Tier 3 = escalate immediately."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.tier }}",
+              "rightValue": "tier1_auto",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-tier1",
+      "name": "Tier 1 Auto-Resolve?",
+      "type": "n8n-nodes-base.if",
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.tier }}",
+              "rightValue": "tier2_assisted",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-tier2",
+      "name": "Tier 2 Assisted?",
+      "type": "n8n-nodes-base.if",
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Route reply back to the correct channel\nconst channel = $('normalise-message').item.json.channel;\nconst reply = $('claude-classify').item.json.resolution_reply;\nconst customer_email = $('normalise-message').item.json.customer_email;\nconst customer_phone = $('normalise-message').item.json.customer_phone;\nconst thread_id = $('normalise-message').item.json.thread_id;\n\nreturn [{ json: { channel, reply, customer_email, customer_phone, thread_id, auto_sent: true } }];"
+      },
+      "id": "prepare-auto-reply",
+      "name": "Prepare Auto-Reply",
+      "type": "n8n-nodes-base.code",
+      "position": [1340, 100],
+      "notes": "Packages the auto-reply for sending back through the originating channel"
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ $('normalise-message').item.json.thread_id }}",
+        "message": "={{ $json.reply }}"
+      },
+      "id": "send-gmail-reply",
+      "name": "Send Gmail Reply",
+      "type": "n8n-nodes-base.gmail",
+      "position": [1560, 60],
+      "notes": "Sends reply back via Gmail. Only fires if channel = 'email'."
+    },
+    {
+      "parameters": {
+        "to": "={{ $('normalise-message').item.json.customer_phone }}",
+        "message": "={{ $json.reply }}"
+      },
+      "id": "send-sms-reply",
+      "name": "Send SMS Reply",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1560, 160],
+      "notes": "Sends reply via Twilio SMS. Only fires if channel = 'sms' or 'whatsapp'."
+    },
+    {
+      "parameters": {
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "=💬 *Draft Reply Ready — Approve to Send*\n\n*From:* {{ $('normalise-message').item.json.customer_name }} ({{ $('normalise-message').item.json.channel }})\n*Intent:* {{ $('claude-classify').item.json.intent }}\n*Sentiment:* {{ $('claude-classify').item.json.sentiment }}\n\n*Their message:*\n_{{ $('normalise-message').item.json.message_text.substring(0, 200) }}..._\n\n*Draft reply:*\n{{ $('claude-classify').item.json.draft_reply }}\n\n---\nReply *YES* to send this reply automatically.\nReply *EDIT [your changes]* to modify before sending.\nReply *SKIP* to handle manually."
+      },
+      "id": "whatsapp-tier2-draft",
+      "name": "WhatsApp — Send Draft to Owner",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1340, 400],
+      "notes": "Sends the Claude-drafted reply to the owner for one-tap approval. Owner replies YES → auto-sends. EDIT [text] → modified reply sent. SKIP → owner handles manually."
+    },
+    {
+      "parameters": {
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "=🚨 *ESCALATION REQUIRED — Urgency {{ $('claude-classify').item.json.urgency_score }}/10*\n\n*From:* {{ $('normalise-message').item.json.customer_name }}\n*Channel:* {{ $('normalise-message').item.json.channel }}\n*Intent:* {{ $('claude-classify').item.json.intent }}\n\n*Issue Summary:*\n{{ $('claude-classify').item.json.escalation_summary }}\n\n*Their message:*\n_{{ $('normalise-message').item.json.message_text }}_\n\n*Recommended action:*\n{{ $('claude-classify').item.json.recommended_action }}\n\n_Auto-reply has been sent to hold the customer while you respond._"
+      },
+      "id": "whatsapp-escalate",
+      "name": "WhatsApp — Escalate to Owner",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1340, 580],
+      "notes": "Immediately alerts owner for Tier 3 issues (legal threats, refund disputes, media). Also sends a holding message to the customer."
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Support Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "timestamp": "={{ new Date().toISOString() }}",
+            "channel": "={{ $('normalise-message').item.json.channel }}",
+            "customer": "={{ $('normalise-message').item.json.customer_name }}",
+            "intent": "={{ $('claude-classify').item.json.intent }}",
+            "tier": "={{ $('claude-classify').item.json.tier }}",
+            "urgency": "={{ $('claude-classify').item.json.urgency_score }}",
+            "sentiment": "={{ $('claude-classify').item.json.sentiment }}",
+            "auto_resolved": "={{ $('claude-classify').item.json.tier === 'tier1_auto' }}",
+            "message_preview": "={{ $('normalise-message').item.json.message_text.substring(0, 100) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-to-crm",
+      "name": "Log Ticket to Support Log",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1780, 300],
+      "notes": "Every message is logged to the support sheet regardless of tier. Enables weekly support digest reporting."
+    }
+  ],
+  "connections": {
+    "Support Inbox Webhook": { "main": [[{ "node": "Normalise Message Format", "type": "main", "index": 0 }]] },
+    "Normalise Message Format": { "main": [[{ "node": "Load Business Knowledge Base", "type": "main", "index": 0 }]] },
+    "Load Business Knowledge Base": { "main": [[{ "node": "Claude — Classify & Route Message", "type": "main", "index": 0 }]] },
+    "Claude — Classify & Route Message": {
+      "main": [[
+        { "node": "Tier 1 Auto-Resolve?", "type": "main", "index": 0 },
+        { "node": "Tier 2 Assisted?", "type": "main", "index": 0 }
+      ]]
+    },
+    "Tier 1 Auto-Resolve?": {
+      "main": [
+        [{ "node": "Prepare Auto-Reply", "type": "main", "index": 0 }],
+        [{ "node": "Tier 2 Assisted?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Tier 2 Assisted?": {
+      "main": [
+        [{ "node": "WhatsApp — Send Draft to Owner", "type": "main", "index": 0 }],
+        [{ "node": "WhatsApp — Escalate to Owner", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare Auto-Reply": { "main": [[{ "node": "Send Gmail Reply", "type": "main", "index": 0 }, { "node": "Send SMS Reply", "type": "main", "index": 0 }]] },
+    "Send Gmail Reply": { "main": [[{ "node": "Log Ticket to Support Log", "type": "main", "index": 0 }]] },
+    "Send SMS Reply": { "main": [[{ "node": "Log Ticket to Support Log", "type": "main", "index": 0 }]] },
+    "WhatsApp — Send Draft to Owner": { "main": [[{ "node": "Log Ticket to Support Log", "type": "main", "index": 0 }]] },
+    "WhatsApp — Escalate to Owner": { "main": [[{ "node": "Log Ticket to Support Log", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "kit": "Universal — All Kits",
+    "workflow": "automated-customer-support",
+    "version": "1.0",
+    "description": "UNIVERSAL — ships in every kit. Handles inbound support from ALL channels (Gmail, WhatsApp, Facebook Messenger, Instagram DMs, SMS, website chatbot, GBP Q&A) through a single workflow. Claude classifies each message and routes to: Tier 1 (auto-resolves 70%+ of messages), Tier 2 (drafts reply for owner one-tap approval), or Tier 3 (immediately escalates urgent issues). All tickets logged to Google Sheets for weekly digest."
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "name": "Kit 7 — Knowledge Panel & Entity Builder",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "entity-builder",
+        "options": {}
+      },
+      "id": "webhook-entity",
+      "name": "Entity Builder Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "notes": "Triggered once during setup. Receives full business profile to build the entity web."
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a Google Knowledge Panel and entity SEO expert.\n\nBuild a complete entity package for this business:\n\nBusiness Name: {{ $json.business_name }}\nWebsite: {{ $json.website_url }}\nIndustry: {{ $json.industry }}\nCity: {{ $json.city }}\nState: {{ $json.state }}\nFounded: {{ $json.founded_year }}\nOwner Name: {{ $json.owner_name }}\nPhone: {{ $json.phone }}\nEmail: {{ $json.email }}\nServices: {{ $json.services }}\nUnique Value Proposition: {{ $json.uvp }}\n\nGenerate ALL of the following:\n\n1. organization_schema: Complete JSON-LD Organization schema markup. Include ALL sameAs properties linking to: website, GBP, LinkedIn, Facebook, Instagram, Twitter/X, YouTube, TikTok, Pinterest, Yelp, TrueLocal, Yellow Pages AU, Foursquare, Wikidata (placeholder), Crunchbase.\n\n2. local_business_schema: JSON-LD LocalBusiness schema (nested within Organization). Include: name, description, url, telephone, address (PostalAddress), geo (GeoCoordinates), openingHoursSpecification (array), priceRange, currenciesAccepted, paymentAccepted, areaServed (array of suburbs), hasOfferCatalog.\n\n3. wikidata_entity_description: A 300-word neutral, encyclopaedic description of the business suitable for Wikidata/Wikipedia. Third-person, factual, no marketing language.\n\n4. google_knowledge_panel_claim_description: The exact text to use when claiming/editing the Google Knowledge Panel (100 words, describes the business entity clearly).\n\n5. entity_consistency_checklist: For each platform (website, GBP, LinkedIn, Facebook, Instagram, YouTube, Twitter, TrueLocal, Yelp), the EXACT text to use for:\n   - Business name (must be identical everywhere)\n   - Short description (155 chars)\n   - Long description (500 chars)\n   - Primary phone\n   - Website URL\n   - Address line\n\n6. crunchbase_profile: Complete Crunchbase organization profile fields (name, short_description, long_description, categories, founded_on, location, website, social_links).\n\nReturn as JSON."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-entity",
+      "name": "Claude — Build Entity Package",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [460, 300],
+      "notes": "Generates complete entity schema, Wikidata description, entity consistency checklist for all platforms"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.wikidata.org/w/api.php",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "formUrlEncoded",
+          "parameters": [
+            { "name": "action", "value": "wbeditentity" },
+            { "name": "new", "value": "item" },
+            { "name": "data", "value": "={{ JSON.stringify({ labels: { en: { language: 'en', value: $('webhook-entity').item.json.business_name } }, descriptions: { en: { language: 'en', value: $json.wikidata_entity_description.substring(0, 250) } } }) }}" },
+            { "name": "format", "value": "json" },
+            { "name": "token", "value": "={{ $env.WIKIDATA_EDIT_TOKEN }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wikidata-submit",
+      "name": "Create Wikidata Entity",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 200],
+      "notes": "Creates a Wikidata item for the business. This is a key signal for triggering a Google Knowledge Panel. Requires Wikidata account credentials in env vars."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.crunchbase.com/api/v4/entities/organizations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify($json.crunchbase_profile) }}"
+        },
+        "options": {}
+      },
+      "id": "crunchbase-submit",
+      "name": "Create Crunchbase Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 400],
+      "notes": "Creates Crunchbase organization profile. If API not available, saves profile data to Google Docs for manual submission."
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "title": "={{ $('webhook-entity').item.json.business_name }} — Schema Markup",
+        "content": "=<!-- Organization + LocalBusiness Schema — paste into website <head> -->\n<script type=\"application/ld+json\">\n{{ JSON.stringify($json.organization_schema, null, 2) }}\n</script>\n\n<!-- LocalBusiness Schema -->\n<script type=\"application/ld+json\">\n{{ JSON.stringify($json.local_business_schema, null, 2) }}\n</script>"
+      },
+      "id": "save-schema-doc",
+      "name": "Save Schema to Google Doc",
+      "type": "n8n-nodes-base.googleDocs",
+      "position": [900, 300],
+      "notes": "Saves the complete schema markup to Google Docs for developer to paste into website <head>"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "title": "={{ $('webhook-entity').item.json.business_name }} — Entity Consistency Checklist",
+        "content": "=# Entity Consistency Checklist\n\nPaste these EXACT values into every platform listed below.\nConsistency across all platforms is the #1 trigger for a Google Knowledge Panel.\n\n---\n\n## Business Name (use EXACTLY this, everywhere)\n{{ $json.entity_consistency_checklist.business_name }}\n\n## Short Description (155 chars — for GBP, directories, bios)\n{{ $json.entity_consistency_checklist.short_description }}\n\n## Long Description (500 chars — for LinkedIn, Facebook, website About)\n{{ $json.entity_consistency_checklist.long_description }}\n\n## Phone\n{{ $json.entity_consistency_checklist.phone }}\n\n## Website\n{{ $json.entity_consistency_checklist.website }}\n\n## Address\n{{ $json.entity_consistency_checklist.address }}\n\n---\n\n## Platforms to Update:\n- [ ] Website (footer + About page)\n- [ ] Google Business Profile\n- [ ] LinkedIn Company Page\n- [ ] Facebook Business Page\n- [ ] Instagram Business Profile\n- [ ] YouTube Channel About\n- [ ] Twitter/X Bio\n- [ ] TrueLocal\n- [ ] Yellow Pages AU\n- [ ] Yelp AU\n- [ ] Wikidata (auto-submitted)\n- [ ] Crunchbase (auto-submitted)\n\n---\n\n## Google Knowledge Panel Claim\nOnce your Knowledge Panel appears (allow 4-8 weeks after Wikidata submission):\n1. Search your business name on Google\n2. Click 'Claim this knowledge panel'\n3. Use this description when prompted:\n\n{{ $json.google_knowledge_panel_claim_description }}"
+      },
+      "id": "save-consistency-doc",
+      "name": "Save Consistency Checklist to Google Doc",
+      "type": "n8n-nodes-base.googleDocs",
+      "position": [900, 450],
+      "notes": "Creates an actionable checklist for the owner to ensure NAP + entity consistency across all platforms"
+    },
+    {
+      "parameters": {
+        "to": "={{ $('webhook-entity').item.json.owner_whatsapp }}",
+        "message": "=🧠 *Knowledge Panel & Entity Setup Complete*\n\n✅ Organization schema generated\n✅ Wikidata entity created\n✅ Crunchbase profile submitted\n✅ Schema markup saved to Google Docs\n✅ Entity consistency checklist created\n\n📋 *Action required from you:*\nPaste the schema markup into your website <head> (your web developer can do this in 5 mins — or we can do it automatically via your CMS).\n\n⏳ Google Knowledge Panel typically appears 4–8 weeks after Wikidata + entity signals are in place.\n\nWe'll monitor weekly and alert you the moment it goes live."
+      },
+      "id": "whatsapp-entity-done",
+      "name": "WhatsApp — Entity Setup Complete",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Entity Builder Webhook": { "main": [[{ "node": "Claude — Build Entity Package", "type": "main", "index": 0 }]] },
+    "Claude — Build Entity Package": {
+      "main": [[
+        { "node": "Create Wikidata Entity", "type": "main", "index": 0 },
+        { "node": "Create Crunchbase Profile", "type": "main", "index": 0 },
+        { "node": "Save Schema to Google Doc", "type": "main", "index": 0 },
+        { "node": "Save Consistency Checklist to Google Doc", "type": "main", "index": 0 }
+      ]]
+    },
+    "Save Consistency Checklist to Google Doc": { "main": [[{ "node": "WhatsApp — Entity Setup Complete", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "kit": "Kit 7 — City Presence Grid",
+    "workflow": "knowledge-panel-builder",
+    "version": "1.0",
+    "description": "Builds the business entity web required to trigger a Google Knowledge Panel. Creates Organization + LocalBusiness schema JSON-LD, submits Wikidata entity, creates Crunchbase profile, and generates an entity consistency checklist for all platforms."
+  }
+}

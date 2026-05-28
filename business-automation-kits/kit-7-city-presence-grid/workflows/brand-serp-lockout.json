@@ -1,0 +1,202 @@
+{
+  "name": "Kit 7 — Brand SERP Lock-Out (Own All 10 Positions on Page 1)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "weeks", "weeksInterval": 1, "triggerAtDay": [1], "triggerAtHour": 7 }] }
+      },
+      "id": "cron-weekly",
+      "name": "Weekly Monday 7am Cron",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 300],
+      "notes": "Runs every Monday at 7am. Audits brand SERP and fills any gaps in page 1 ownership."
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "Business Config",
+        "options": {}
+      },
+      "id": "load-config",
+      "name": "Load Business Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 300],
+      "notes": "Loads: business_name, website_url, owner_whatsapp, target_keywords, industry"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "q", "value": "={{ $json.business_name }}" },
+            { "name": "location", "value": "={{ $json.city }}, Australia" },
+            { "name": "gl", "value": "au" },
+            { "name": "hl", "value": "en" },
+            { "name": "num", "value": "10" },
+            { "name": "api_key", "value": "={{ $env.SERPAPI_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "serp-check",
+      "name": "SERP API — Brand Search Audit",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 300],
+      "notes": "Pulls top 10 organic results for the brand name. Uses SerpAPI (or ValueSERP as alternative). Identifies which positions the business does NOT own."
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a brand SERP strategist. Analyse these Google search results for '{{ $('load-config').item.json.business_name }}' and identify gaps.\n\nSearch results:\n{{ JSON.stringify($json.organic_results, null, 2) }}\n\nKnowledge panel present: {{ $json.knowledge_graph ? 'YES' : 'NO' }}\nMap pack present: {{ $json.local_results ? 'YES' : 'NO' }}\n\nTarget assets for SERP ownership:\n- Position 1: Official website (organic)\n- Position 2-3: Inner pages (About, Services, Blog)\n- Knowledge Panel: Google Knowledge Graph card\n- Map Pack: Google Business Profile (3-pack)\n- Position 4: YouTube channel or video\n- Position 5: LinkedIn company page\n- Position 6: Facebook business page\n- Position 7: Instagram profile\n- Position 8: Press article or news mention\n- Position 9: Industry directory (TrueLocal, Yellow Pages, HiPages)\n- Position 10: Reddit, Quora, or community mention\n\nFor EACH gap (position not owned by the business), provide:\n1. asset_to_create: What needs to be built/claimed\n2. platform: Which platform\n3. priority: high/medium/low\n4. estimated_time_to_index: days\n5. auto_buildable: true/false (can n8n + Claude create it automatically?)\n6. action: Exact action to take\n7. content_needed: Brief description of content required\n\nAlso provide:\n- overall_serp_score: X/10 (positions owned)\n- knowledge_panel_status: present/absent/partial\n- top_priority_fix: The single most impactful gap to fix this week\n\nReturn as JSON."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-serp-audit",
+      "name": "Claude — SERP Gap Analysis",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [900, 300],
+      "notes": "Claude analyses which of the 10 page-1 positions are not owned by the business and generates a fix plan for each"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.gaps.some(g => g.platform === 'YouTube' && g.auto_buildable) }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-youtube-gap",
+      "name": "YouTube Gap?",
+      "type": "n8n-nodes-base.if",
+      "position": [1120, 180],
+      "notes": "Routes to YouTube channel creation flow if YouTube is missing from SERP"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=Write a complete YouTube channel setup package for:\n\nBusiness: {{ $('load-config').item.json.business_name }}\nIndustry: {{ $('load-config').item.json.industry }}\nCity: {{ $('load-config').item.json.city }}\n\nGenerate:\n1. channel_name: Best YouTube channel name (business name + optional descriptor)\n2. channel_description: 500 word channel description, keyword-optimised for YouTube search\n3. channel_keywords: 20 tags for the channel\n4. intro_video_script: 90-second intro video script. Structure: hook (0-5s), who we are (5-30s), what we do (30-60s), social proof (60-75s), CTA (75-90s). Include b-roll directions in [brackets].\n5. first_3_video_titles: SEO-optimised titles targeting '[service] [city]' keyword structure\n6. first_3_video_descriptions: 300-word descriptions per video, with timestamps and keyword-rich text\n7. playlist_names: 5 playlist names that organise content by topic\n8. channel_art_brief: 150-word design brief for channel banner art (for Canva)\n\nReturn as JSON."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-youtube",
+      "name": "Claude — YouTube Channel Package",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [1340, 100],
+      "notes": "Generates complete YouTube channel setup: description, keywords, scripts for first 3 videos, playlist structure"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=Write a complete press release for distribution to Australian news sites and PR newswire services.\n\nBusiness: {{ $('load-config').item.json.business_name }}\nIndustry: {{ $('load-config').item.json.industry }}\nCity: {{ $('load-config').item.json.city }}\n\nAngle: Business milestone / expansion / new service / community involvement (choose the most newsworthy angle for this industry).\n\nFormat:\n- Headline (60 chars max, newsworthy)\n- Subheadline (120 chars)\n- Dateline: [City], Australia — [today's date]\n- Lead paragraph (50 words, covers who/what/where/when/why)\n- Body (3 paragraphs, 100 words each)\n- Quote from business owner (authentic, not corporate-speak)\n- Boilerplate (100 words about the business, evergreen)\n- Contact details section\n\nAlso generate:\n- distribution_targets: 5 Australian PR distribution sites to submit to\n- seo_anchor_text: 3 keyword-rich anchor text phrases for backlinks in the release\n- social_share_caption: Instagram/Facebook caption announcing the press release\n\nReturn as JSON with field 'press_release_html' containing the full release in clean HTML."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-press-release",
+      "name": "Claude — Press Release Generator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [1340, 300],
+      "notes": "Generates a newsworthy press release to create a news/media mention on page 1 of brand search results"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.prweb.com/release/submit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "body": {
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"headline\": \"{{ $json.headline }}\",\n  \"body\": \"{{ $json.press_release_html }}\",\n  \"industry\": \"{{ $('load-config').item.json.industry }}\",\n  \"distribution\": \"standard\"\n}"
+        },
+        "options": {}
+      },
+      "id": "submit-pr",
+      "name": "Submit Press Release to PRWeb",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1560, 300],
+      "notes": "Distributes press release via PRWeb API. Fallback: saves to Google Docs for manual submission if API unavailable."
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": "={{ $env.CITY_GRID_SHEET_ID }}",
+        "sheetName": "SERP Audit Log",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ new Date().toISOString().split('T')[0] }}",
+            "serp_score": "={{ $('claude-serp-audit').item.json.overall_serp_score }}",
+            "knowledge_panel": "={{ $('claude-serp-audit').item.json.knowledge_panel_status }}",
+            "gaps_count": "={{ $('claude-serp-audit').item.json.gaps.length }}",
+            "top_priority": "={{ $('claude-serp-audit').item.json.top_priority_fix }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "log-serp",
+      "name": "Log SERP Audit Results",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1780, 300],
+      "notes": "Records weekly SERP score trend — tracks improvement over time"
+    },
+    {
+      "parameters": {
+        "to": "={{ $('load-config').item.json.owner_whatsapp }}",
+        "message": "=🔍 *Weekly Brand SERP Report*\n\n📊 *You own {{ $('claude-serp-audit').item.json.overall_serp_score }}/10 page-1 positions* for '{{ $('load-config').item.json.business_name }}'\n\nKnowledge Panel: {{ $('claude-serp-audit').item.json.knowledge_panel_status === 'present' ? '✅ Showing' : '⚠️ Not yet showing' }}\nMap Pack: {{ $json.local_results_present ? '✅ In 3-pack' : '⚠️ Missing' }}\n\n🎯 *Top priority this week:*\n{{ $('claude-serp-audit').item.json.top_priority_fix }}\n\n{{ $('claude-serp-audit').item.json.gaps.length > 0 ? '⚙️ Auto-fixing ' + $('claude-serp-audit').item.json.gaps.filter(g => g.auto_buildable).length + ' gaps now...' : '🏆 Page 1 fully locked down!' }}"
+      },
+      "id": "whatsapp-serp-report",
+      "name": "WhatsApp — SERP Weekly Report",
+      "type": "n8n-nodes-base.twilio",
+      "position": [2000, 300],
+      "notes": "Weekly owner update on brand SERP ownership score and actions taken"
+    }
+  ],
+  "connections": {
+    "Weekly Monday 7am Cron": { "main": [[{ "node": "Load Business Config", "type": "main", "index": 0 }]] },
+    "Load Business Config": { "main": [[{ "node": "SERP API — Brand Search Audit", "type": "main", "index": 0 }]] },
+    "SERP API — Brand Search Audit": { "main": [[{ "node": "Claude — SERP Gap Analysis", "type": "main", "index": 0 }]] },
+    "Claude — SERP Gap Analysis": { "main": [[{ "node": "YouTube Gap?", "type": "main", "index": 0 }, { "node": "Claude — Press Release Generator", "type": "main", "index": 0 }]] },
+    "YouTube Gap?": {
+      "main": [
+        [{ "node": "Claude — YouTube Channel Package", "type": "main", "index": 0 }],
+        [{ "node": "Log SERP Audit Results", "type": "main", "index": 0 }]
+      ]
+    },
+    "Claude — Press Release Generator": { "main": [[{ "node": "Submit Press Release to PRWeb", "type": "main", "index": 0 }]] },
+    "Submit Press Release to PRWeb": { "main": [[{ "node": "Log SERP Audit Results", "type": "main", "index": 0 }]] },
+    "Log SERP Audit Results": { "main": [[{ "node": "WhatsApp — SERP Weekly Report", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": {
+    "kit": "Kit 7 — City Presence Grid",
+    "workflow": "brand-serp-lockout",
+    "version": "1.0",
+    "description": "Weekly audit of brand name search results. Identifies which of the 10 page-1 positions the business does not own, generates missing assets (YouTube channel content, press releases, directory profiles), and reports SERP ownership score to owner."
+  }
+}

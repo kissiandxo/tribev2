@@ -1,0 +1,311 @@
+{
+  "name": "Kit 1 — CRM Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-update",
+        "options": {}
+      },
+      "id": "webhook-crm-update",
+      "name": "CRM Update Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 200],
+      "notes": "Branch A: POST /crm-update with: lead_id, new_status, notes, next_action_date"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "CRM",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "lead_id": "={{ $json.lead_id }}",
+            "status": "={{ $json.new_status }}",
+            "notes": "={{ $json.notes }}",
+            "next_action_date": "={{ $json.next_action_date }}",
+            "last_updated": "={{ new Date().toISOString() }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "update-crm-sheet",
+      "name": "Update CRM Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 200],
+      "notes": "Updates the lead status in the CRM Google Sheet"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "won-check",
+              "leftValue": "={{ $('CRM Update Webhook').item.json.new_status }}",
+              "rightValue": "won",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-won",
+      "name": "Status = Won?",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 200],
+      "notes": "Routes won deals to invoice creation and celebration"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.N8N_WEBHOOK_URL }}/new-invoice",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"lead_id\": \"{{ $('CRM Update Webhook').item.json.lead_id }}\",\n  \"source\": \"crm_pipeline_won\",\n  \"trigger\": \"auto\"\n}",
+        "options": {}
+      },
+      "id": "trigger-invoice-creation",
+      "name": "Trigger Invoice Creation",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 100],
+      "notes": "Calls the invoice workflow webhook when a deal is won"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "=🎉 DEAL WON! 🏆\n\nLead ID: {{ $('CRM Update Webhook').item.json.lead_id }}\n\nNotes: {{ $('CRM Update Webhook').item.json.notes }}\n\nInvoice creation has been triggered automatically.\n\nGreat work! 💪"
+      },
+      "id": "whatsapp-won-celebration",
+      "name": "WhatsApp — Congrats to Owner",
+      "type": "n8n-nodes-base.twilio",
+      "position": [900, 220],
+      "notes": "Sends congratulations WhatsApp to owner when a deal is won"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "id": "lost-check",
+              "leftValue": "={{ $('CRM Update Webhook').item.json.new_status }}",
+              "rightValue": "lost",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "is-lost",
+      "name": "Status = Lost?",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 380],
+      "notes": "Routes lost deals to 14-day re-engagement email"
+    },
+    {
+      "parameters": {
+        "amount": 14,
+        "unit": "days"
+      },
+      "id": "wait-14-days",
+      "name": "Wait 14 Days",
+      "type": "n8n-nodes-base.wait",
+      "position": [900, 380],
+      "notes": "Waits 14 days before sending re-engagement email to lost lead"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "CRM",
+        "options": {}
+      },
+      "id": "read-lost-lead",
+      "name": "Read Lost Lead Details",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1120, 380],
+      "notes": "Reads full lead details for re-engagement email"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=Still thinking about it? — {{ $env.BUSINESS_NAME }}",
+        "message": "=Hi {{ $json.name }},\n\nWe noticed we haven't connected recently, and wanted to reach out in case you were still considering {{ $json.service || 'our services' }}.\n\nWe understand timing isn't always perfect, and there's no pressure at all. We just want you to know we're here when you're ready.\n\nIf anything has changed or you have questions, simply reply to this email or give us a call at {{ $env.BUSINESS_PHONE }}.\n\nWarm regards,\n{{ $env.BUSINESS_NAME }}\n{{ $env.BUSINESS_WEBSITE }}",
+        "options": {
+          "senderName": "={{ $env.BUSINESS_NAME }}"
+        }
+      },
+      "id": "send-reengagement-email",
+      "name": "Send Re-engagement Email",
+      "type": "n8n-nodes-base.gmail",
+      "position": [1340, 380],
+      "notes": "Sends re-engagement email 14 days after deal marked as lost"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-daily-pipeline",
+      "name": "Daily 8am Pipeline Review",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 620],
+      "notes": "Branch B: Fires every day at 8am for daily pipeline review"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "CRM",
+        "options": {}
+      },
+      "id": "read-all-crm",
+      "name": "Read All CRM Leads",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 620],
+      "notes": "Reads all CRM leads from Google Sheets for daily review"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Find leads with no contact in 7+ days\nconst leads = $input.all();\nconst now = new Date();\nconst sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);\n\nconst staleLeads = leads.filter(item => {\n  const lead = item.json;\n  if (lead.status === 'won' || lead.status === 'lost' || lead.status === 'cancelled') return false;\n  if (!lead.last_updated && !lead.date) return true;\n  const lastContact = new Date(lead.last_updated || lead.date);\n  return lastContact < sevenDaysAgo;\n});\n\nconst activeLeads = leads.filter(item => {\n  const lead = item.json;\n  return lead.status !== 'won' && lead.status !== 'lost' && lead.status !== 'cancelled';\n});\n\nreturn [{\n  json: {\n    stale_leads: staleLeads.map(i => i.json),\n    active_leads: activeLeads.map(i => i.json),\n    total_active: activeLeads.length,\n    total_stale: staleLeads.length,\n    review_date: now.toISOString().split('T')[0]\n  }\n}];"
+      },
+      "id": "identify-stale-leads",
+      "name": "Identify Stale Leads (7+ Days)",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 620],
+      "notes": "Finds all leads with no contact in 7+ days"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a sales pipeline manager for {{ $env.BUSINESS_NAME }}.\n\nCreate a prioritised daily chase list for {{ $json.review_date }}.\n\nALL ACTIVE LEADS:\n{{ JSON.stringify($json.active_leads, null, 2) }}\n\nSTALE LEADS (no contact in 7+ days):\n{{ JSON.stringify($json.stale_leads, null, 2) }}\n\nGenerate a concise WhatsApp-formatted chase list that:\n1. Lists the top 5 leads to contact TODAY in priority order\n2. For each: name, service interested in, days since last contact, suggested action\n3. Flags any hot leads or leads with upcoming next_action_date\n4. Ends with a one-line pipeline health summary\n\nFormat for WhatsApp (use emojis, line breaks, keep total under 600 chars):\n\n📋 Chase List — [date]\n\n🔥 Priority contacts today:\n1. [Name] — [service] — [X days stale] — [action]\n2. ...\n\n💡 Pipeline: [health summary]\n\nReturn only the WhatsApp message text, no JSON wrapper."
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-chase-list",
+      "name": "Claude — Generate Chase List",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [900, 620],
+      "notes": "Claude generates a prioritised daily chase list from all CRM leads"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "={{ $json.content || $json.text || $json.output || 'Chase list generation failed — check n8n logs.' }}"
+      },
+      "id": "whatsapp-chase-list",
+      "name": "Send Chase List to Owner",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1120, 620],
+      "notes": "Sends the daily chase list to the business owner via WhatsApp at 8am"
+    }
+  ],
+  "connections": {
+    "CRM Update Webhook": {
+      "main": [
+        [
+          { "node": "Update CRM Sheet", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Update CRM Sheet": {
+      "main": [
+        [
+          { "node": "Status = Won?", "type": "main", "index": 0 },
+          { "node": "Status = Lost?", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Status = Won?": {
+      "main": [
+        [
+          { "node": "Trigger Invoice Creation", "type": "main", "index": 0 },
+          { "node": "WhatsApp — Congrats to Owner", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    },
+    "Status = Lost?": {
+      "main": [
+        [
+          { "node": "Wait 14 Days", "type": "main", "index": 0 }
+        ],
+        []
+      ]
+    },
+    "Wait 14 Days": {
+      "main": [
+        [
+          { "node": "Read Lost Lead Details", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Lost Lead Details": {
+      "main": [
+        [
+          { "node": "Send Re-engagement Email", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Daily 8am Pipeline Review": {
+      "main": [
+        [
+          { "node": "Read All CRM Leads", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read All CRM Leads": {
+      "main": [
+        [
+          { "node": "Identify Stale Leads (7+ Days)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Identify Stale Leads (7+ Days)": {
+      "main": [
+        [
+          { "node": "Claude — Generate Chase List", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude — Generate Chase List": {
+      "main": [
+        [
+          { "node": "Send Chase List to Owner", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "kit": "Kit 1 — Universal Business Core",
+    "workflow": "crm-pipeline",
+    "version": "1.0",
+    "description": "Two-branch CRM workflow. Branch A: Status Updater webhook — updates CRM sheet, triggers invoice on win, sends congratulations WhatsApp, and schedules 14-day re-engagement email on loss. Branch B: Daily 8am pipeline review — Claude generates a prioritised chase list of stale leads and sends via WhatsApp."
+  }
+}

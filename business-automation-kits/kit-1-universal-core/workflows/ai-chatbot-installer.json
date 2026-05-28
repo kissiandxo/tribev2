@@ -1,0 +1,245 @@
+{
+  "name": "Kit 1 — AI Chatbot Installer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "install-chatbot",
+        "options": {}
+      },
+      "id": "webhook-install",
+      "name": "Install Chatbot Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "notes": "POST /install-chatbot with: website_url, business_name"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.website_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "scrape-homepage",
+      "name": "Scrape Website Homepage",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [460, 300],
+      "notes": "Fetches the website HTML for content extraction"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Extract clean text from HTML\nconst html = $input.item.json.data || $input.item.json.body || $input.item.json || '';\nconst htmlStr = typeof html === 'string' ? html : JSON.stringify(html);\n\n// Remove script and style tags\nlet text = htmlStr\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&amp;/g, '&')\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&nbsp;/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\n// Limit to first 8000 characters to stay within context limits\ntext = text.substring(0, 8000);\n\nreturn {\n  json: {\n    website_url: $('Install Chatbot Webhook').item.json.website_url,\n    business_name: $('Install Chatbot Webhook').item.json.business_name,\n    scraped_text: text,\n    scraped_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "extract-text",
+      "name": "Extract Text from HTML",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "notes": "Strips HTML tags and extracts clean text content from the website"
+    },
+    {
+      "parameters": {
+        "model": "claude-opus-4-7",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "=You are a business knowledge extractor. Analyse this website content and extract structured knowledge for a customer support chatbot.\n\nBUSINESS NAME: {{ $json.business_name }}\nWEBSITE URL: {{ $json.website_url }}\n\nWEBSITE CONTENT:\n{{ $json.scraped_text }}\n\nExtract and return as JSON:\n{\n  \"business_name\": \"name\",\n  \"business_type\": \"type of business\",\n  \"location\": \"city/suburb\",\n  \"phone\": \"phone number or null\",\n  \"email\": \"email or null\",\n  \"hours\": \"opening hours as a string\",\n  \"services\": [\n    {\n      \"name\": \"service name\",\n      \"description\": \"brief description\",\n      \"price\": \"price or price range or null\"\n    }\n  ],\n  \"faqs\": [\n    {\n      \"question\": \"common question\",\n      \"answer\": \"answer\"\n    }\n  ],\n  \"policies\": [\n    {\n      \"policy\": \"policy name\",\n      \"details\": \"details\"\n    }\n  ],\n  \"unique_selling_points\": [\"USP 1\", \"USP 2\"],\n  \"service_area\": \"geographic service area\",\n  \"booking_process\": \"how to book or enquire\",\n  \"social_media\": {\n    \"facebook\": \"url or null\",\n    \"instagram\": \"url or null\"\n  },\n  \"knowledge_summary\": \"A 3-sentence summary of the business for chatbot context\"\n}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "claude-extract-knowledge",
+      "name": "Claude — Extract Business Knowledge",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "position": [900, 300],
+      "notes": "Claude extracts structured knowledge: services, prices, FAQs, hours, contact info, policies"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse Claude's knowledge extraction\nconst claudeOutput = $input.item.json.content || $input.item.json.text || $input.item.json.output || '';\nlet knowledge;\ntry {\n  const jsonMatch = claudeOutput.match(/\\{[\\s\\S]*\\}/);\n  knowledge = jsonMatch ? JSON.parse(jsonMatch[0]) : { knowledge_summary: claudeOutput };\n} catch(e) {\n  knowledge = { knowledge_summary: claudeOutput, parse_error: e.message };\n}\n\n// Generate chatbot embed code\nconst webhookBaseUrl = $env.N8N_WEBHOOK_URL || 'https://your-n8n-instance.app.n8n.cloud/webhook';\nconst businessName = $('Install Chatbot Webhook').item.json.business_name;\nconst embedCode = `<!-- ${businessName} AI Chat Widget -->\n<script>\n(function() {\n  var widget = document.createElement('div');\n  widget.id = 'tribe-chat-widget';\n  widget.innerHTML = '<div id=\"tribe-chat-bubble\" onclick=\"toggleTribeChat()\" style=\"position:fixed;bottom:20px;right:20px;width:60px;height:60px;background:#2563eb;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:9999;\"><svg width=\"28\" height=\"28\" fill=\"white\" viewBox=\"0 0 24 24\"><path d=\"M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z\"/></svg></div><div id=\"tribe-chat-window\" style=\"display:none;position:fixed;bottom:90px;right:20px;width:340px;height:500px;background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.2);z-index:9998;flex-direction:column;overflow:hidden;\"><div style=\"background:#2563eb;color:#fff;padding:16px;font-weight:600;font-size:15px;\">💬 Chat with us</div><div id=\"tribe-messages\" style=\"flex:1;overflow-y:auto;padding:12px;\"></div><div style=\"padding:12px;border-top:1px solid #eee;display:flex;gap:8px;\"><input id=\"tribe-input\" placeholder=\"Type a message...\" style=\"flex:1;border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:14px;\" onkeydown=\"if(event.key==\\'Enter\\') sendTribeMessage()\"/><button onclick=\"sendTribeMessage()\" style=\"background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;\">Send</button></div></div>';\n  document.body.appendChild(widget);\n  var chatHistory = [];\n  window.toggleTribeChat = function() {\n    var win = document.getElementById('tribe-chat-window');\n    win.style.display = win.style.display === 'none' ? 'flex' : 'none';\n    if (win.style.display === 'flex' && chatHistory.length === 0) {\n      addMessage('bot', 'Hi! 👋 Welcome to ${businessName}. How can I help you today?');\n    }\n  };\n  window.sendTribeMessage = function() {\n    var input = document.getElementById('tribe-input');\n    var msg = input.value.trim();\n    if (!msg) return;\n    addMessage('user', msg);\n    input.value = '';\n    fetch('${webhookBaseUrl}/support-inbox', {\n      method: 'POST',\n      headers: {'Content-Type': 'application/json'},\n      body: JSON.stringify({channel:'chatbot',message:msg,customer_name:'Website Visitor',source:'website_chatbot',history:chatHistory})\n    }).then(r=>r.json()).then(data=>{\n      var reply = data.reply || data.resolution_reply || data.message || 'Thanks for your message! We\\'ll be in touch shortly.';\n      addMessage('bot', reply);\n    }).catch(()=>addMessage('bot','Thanks! A team member will be in touch shortly.'));\n  };\n  function addMessage(role, text) {\n    chatHistory.push({role, content: text});\n    var msgs = document.getElementById('tribe-messages');\n    var div = document.createElement('div');\n    div.style.cssText = 'margin:6px 0;padding:8px 12px;border-radius:10px;max-width:85%;font-size:14px;line-height:1.4;' + (role==='user'?'background:#2563eb;color:#fff;margin-left:auto;':'background:#f3f4f6;color:#111;');\n    div.textContent = text;\n    msgs.appendChild(div);\n    msgs.scrollTop = msgs.scrollHeight;\n  }\n})();\n</script>`;\n\nreturn {\n  json: {\n    knowledge,\n    embed_code: embedCode,\n    business_name: $('Install Chatbot Webhook').item.json.business_name,\n    website_url: $('Install Chatbot Webhook').item.json.website_url,\n    installed_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "generate-embed-code",
+      "name": "Generate Chatbot Embed Code",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "notes": "Parses knowledge and generates a JavaScript chatbot widget embed code"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Knowledge Base",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "last_updated": "={{ new Date().toISOString() }}",
+            "business_name": "={{ $json.knowledge.business_name }}",
+            "business_type": "={{ $json.knowledge.business_type }}",
+            "location": "={{ $json.knowledge.location }}",
+            "phone": "={{ $json.knowledge.phone }}",
+            "email": "={{ $json.knowledge.email }}",
+            "hours": "={{ $json.knowledge.hours }}",
+            "services": "={{ JSON.stringify($json.knowledge.services) }}",
+            "faqs": "={{ JSON.stringify($json.knowledge.faqs) }}",
+            "policies": "={{ JSON.stringify($json.knowledge.policies) }}",
+            "knowledge_summary": "={{ $json.knowledge.knowledge_summary }}",
+            "service_area": "={{ $json.knowledge.service_area }}",
+            "booking_process": "={{ $json.knowledge.booking_process }}",
+            "unique_selling_points": "={{ JSON.stringify($json.knowledge.unique_selling_points) }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "save-knowledge-base",
+      "name": "Save to Knowledge Base Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [1340, 180],
+      "notes": "Saves extracted business knowledge to the Knowledge Base tab used by the support workflow"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.BUSINESS_EMAIL }}",
+        "subject": "=Your AI Chatbot is Ready — {{ $json.business_name }}",
+        "message": "=Hi {{ $env.OWNER_NAME }},\n\nYour AI chatbot has been set up and is ready to install on your website!\n\nHere's your embed code — paste it just before the </body> tag on every page of your website:\n\n---\n{{ $json.embed_code }}\n---\n\nThe chatbot will:\n✅ Answer customer questions 24/7 using your business knowledge\n✅ Capture leads and send them to your CRM\n✅ Escalate complex queries to you via WhatsApp\n\nKnowledge extracted from your website:\n- Services: {{ $json.knowledge.services?.length || 0 }} services found\n- FAQs: {{ $json.knowledge.faqs?.length || 0 }} FAQs found\n- Hours: {{ $json.knowledge.hours }}\n\nIf you need help installing this, reply to this email.\n\n{{ $env.BUSINESS_NAME }} Automation Team",
+        "options": {
+          "senderName": "={{ $env.BUSINESS_NAME }}"
+        }
+      },
+      "id": "send-embed-email",
+      "name": "Email Embed Code to Owner",
+      "type": "n8n-nodes-base.gmail",
+      "position": [1340, 300],
+      "notes": "Sends the chatbot embed code and installation instructions via email"
+    },
+    {
+      "parameters": {
+        "from": "={{ $env.TWILIO_PHONE_NUMBER }}",
+        "to": "={{ $env.OWNER_WHATSAPP }}",
+        "message": "=🤖 Your AI chatbot is ready!\n\n✅ Knowledge extracted from {{ $json.website_url }}\n📋 {{ $json.knowledge.services?.length || 0 }} services, {{ $json.knowledge.faqs?.length || 0 }} FAQs found\n\nCheck your email for the embed code to paste on your website.\n\nThe chatbot will auto-refresh every Sunday at 2am to stay up to date."
+      },
+      "id": "whatsapp-owner-chatbot-ready",
+      "name": "WhatsApp — Chatbot Ready Alert",
+      "type": "n8n-nodes-base.twilio",
+      "position": [1340, 440],
+      "notes": "Sends WhatsApp notification to owner that chatbot is installed"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "cron-weekly-refresh",
+      "name": "Weekly Refresh (Sunday 2am)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 560],
+      "notes": "Triggers weekly re-scrape of website every Sunday at 2am"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": "={{ $env.BUSINESS_CONFIG_SHEET_ID }}",
+        "sheetName": "Knowledge Base",
+        "options": {}
+      },
+      "id": "read-current-knowledge",
+      "name": "Read Current Knowledge Base",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [460, 560],
+      "notes": "Reads current knowledge to get website URL for re-scraping"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.website_url || $env.BUSINESS_WEBSITE }}",
+        "options": {}
+      },
+      "id": "re-scrape-website",
+      "name": "Re-scrape Website",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 560],
+      "notes": "Re-fetches the website for fresh content"
+    }
+  ],
+  "connections": {
+    "Install Chatbot Webhook": {
+      "main": [
+        [
+          { "node": "Scrape Website Homepage", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Scrape Website Homepage": {
+      "main": [
+        [
+          { "node": "Extract Text from HTML", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Extract Text from HTML": {
+      "main": [
+        [
+          { "node": "Claude — Extract Business Knowledge", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Claude — Extract Business Knowledge": {
+      "main": [
+        [
+          { "node": "Generate Chatbot Embed Code", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Generate Chatbot Embed Code": {
+      "main": [
+        [
+          { "node": "Save to Knowledge Base Sheet", "type": "main", "index": 0 },
+          { "node": "Email Embed Code to Owner", "type": "main", "index": 0 },
+          { "node": "WhatsApp — Chatbot Ready Alert", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Weekly Refresh (Sunday 2am)": {
+      "main": [
+        [
+          { "node": "Read Current Knowledge Base", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Read Current Knowledge Base": {
+      "main": [
+        [
+          { "node": "Re-scrape Website", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Re-scrape Website": {
+      "main": [
+        [
+          { "node": "Extract Text from HTML", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "kit": "Kit 1 — Universal Business Core",
+    "workflow": "ai-chatbot-installer",
+    "version": "1.0",
+    "description": "One-time setup webhook that scrapes the business website, uses Claude to extract services/prices/FAQs/hours/contact info/policies, saves to Knowledge Base Google Sheet, generates a JavaScript chatbot widget embed code, and sends it to the owner. Also includes a weekly Sunday 2am re-scrape to keep knowledge fresh."
+  }
+}
